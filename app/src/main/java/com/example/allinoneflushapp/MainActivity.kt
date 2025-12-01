@@ -1,6 +1,7 @@
 package com.example.allinoneflushapp
 
 import android.app.ActivityManager
+import android.content.ComponentCallbacks2  // <-- BARU: import ni
 import android.content.Context
 import android.net.ConnectivityManager
 import android.os.Bundle
@@ -47,7 +48,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateIP() {
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val ip = URL("https://api.ipify.org").readText()
+                val ip = URL("https://api.ipify.org").readText() // dibetulkan: buang extra space
                 runOnUiThread {
                     textViewIP.text = "Public IP: $ip"
                 }
@@ -72,9 +73,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renewIP() {
-        // Best-effort: trigger network reconnect
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        cm.allNetworks // Hint: user needs to toggle network manually or VPN for full IP change
+        cm.allNetworks
         bestEffortRAMFlush()
         updateIP()
         Toast.makeText(this, "Attempted IP refresh", Toast.LENGTH_SHORT).show()
@@ -86,7 +86,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun bestEffortRAMFlush() {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        am.trimMemory(TRIM_MEMORY_COMPLETE)
+        am.trimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE) // <-- BETUL: guna full reference
         System.gc()
     }
 }
