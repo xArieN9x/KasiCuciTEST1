@@ -5,19 +5,12 @@ workflows:
     environment:
       java: 17
     scripts:
-      - name: Generate Gradle Wrapper
+      - name: Build Debug APK using Gradle CLI
         script: |
-          # Install Gradle CLI (available in Codemagic)
-          gradle --version
-          # Generate wrapper with Gradle 8.0
-          gradle wrapper --gradle-version 8.0
-          chmod +x ./gradlew
+          # Guna gradle CLI terus (sedia ada di Codemagic)
+          gradle clean assembleDebug
 
-      - name: Build Debug APK (signed & installable)
-        script: |
-          ./gradlew clean assembleDebug
-
-      - name: List APK
+      - name: Verify APK
         script: |
           ls -la app/build/outputs/apk/debug/
 
