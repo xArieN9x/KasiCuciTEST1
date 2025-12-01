@@ -13,6 +13,7 @@ workflows:
       - name: Build APK
         script: |
           ./gradlew assembleRelease
+          ls -l app/build/outputs/apk/release/
           
     artifacts:
       - app/build/outputs/**/*.apk
