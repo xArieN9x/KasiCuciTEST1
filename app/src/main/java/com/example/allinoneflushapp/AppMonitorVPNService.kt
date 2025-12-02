@@ -1,27 +1,25 @@
 package com.example.allinoneflushapp
 
+import android.app.PendingIntent
 import android.content.Intent
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import java.io.FileInputStream
-import java.io.FileOutputStream
 
 class AppMonitorVPNService : VpnService() {
 
     companion object {
         private var pandaActive = false
         private var dnsIndex = 0
+        private var instance: AppMonitorVPNService? = null
 
         fun isPandaActive() = pandaActive
 
         fun rotateDNS(dnsList: List<String>) {
             dnsIndex = (dnsIndex + 1) % dnsList.size
             val nextDNS = dnsList[dnsIndex]
-            // Re-establish VPN with new DNS
             instance?.setDNS(nextDNS)
         }
-
-        private var instance: AppMonitorVPNService? = null
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
