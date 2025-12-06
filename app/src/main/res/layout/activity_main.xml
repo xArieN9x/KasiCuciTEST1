@@ -4,7 +4,6 @@
     android:layout_height="match_parent"
     android:padding="16dp">
 
-    <!-- Public IP -->
     <TextView
         android:id="@+id/textViewIP"
         android:layout_width="wrap_content"
@@ -14,7 +13,6 @@
         android:layout_alignParentTop="true"
         android:layout_centerHorizontal="true"/>
 
-    <!-- DNS Panel -->
     <TextView
         android:id="@+id/textViewDNS"
         android:layout_width="wrap_content"
@@ -25,7 +23,6 @@
         android:layout_marginTop="12dp"
         android:layout_centerHorizontal="true"/>
 
-    <!-- Network Indicator -->
     <ImageView
         android:id="@+id/networkIndicator"
         android:layout_width="30dp"
@@ -35,7 +32,6 @@
         android:layout_centerHorizontal="true"
         android:src="@drawable/red_circle"/>
 
-    <!-- Do All Job Button -->
     <Button
         android:id="@+id/btnDoAllJob"
         android:layout_width="wrap_content"
@@ -46,4 +42,13 @@
         android:layout_centerHorizontal="true"
         android:padding="12dp"/>
 
+    <Button
+        android:id="@+id/btnStartVpn"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Start VPN (Grant perm)"
+        android:layout_below="@id/btnDoAllJob"
+        android:layout_marginTop="12dp"
+        android:layout_centerHorizontal="true"
+        android:padding="8dp"/>
 </RelativeLayout>
