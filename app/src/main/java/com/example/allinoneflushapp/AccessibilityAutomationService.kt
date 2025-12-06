@@ -18,7 +18,7 @@ class AccessibilityAutomationService : AccessibilityService() {
         private const val AIRPLANE_DELAY = 8000L
         private val storageKeys = arrayOf("Storage usage", "Storage", "Storage & cache", "App storage")
         private val forceStopKeys = arrayOf("Force stop", "Force Stop", "Paksa berhenti", "Paksa Hentikan")
-        private val confirmOkKeys = arrayOf("OK", "Yes", "Confirm", "Ya", "Force stop")
+        private val confirmOkKeys = arrayOf("OK", "Yes", "Confirm", "Ya", "Force stop", "Force Stop")
         private val clearCacheKeys = arrayOf("Clear cache", "Clear Cache", "Kosongkan cache")
 
         fun requestClearAndForceStop(packageName: String) {
