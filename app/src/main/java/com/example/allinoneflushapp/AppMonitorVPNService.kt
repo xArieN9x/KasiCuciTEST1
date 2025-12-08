@@ -75,20 +75,11 @@ class AppMonitorVPNService : VpnService() {
     
         val builder = Builder()
         builder.setSession("PandaMonitor")
+            .addAddress("10.0.0.2", 32)
+            .addDnsServer(dns)
+            .addRoute("1.1.1.1", 32)
+            .addRoute("0.0.0.0", 0)
     
-        // IP Address
-        builder.addAddress("10.0.0.2", 32)
-    
-        // FIX #1: DNS mesti dulu
-        builder.addDnsServer(dns)          // ← moved to TOP
-    
-        // FIX #2: Bootstrap route
-        builder.addRoute("8.8.8.8", 32)     // ← penting untuk Internet hidup
-    
-        // FIX #3: Full route AFTER bootstrap
-        builder.addRoute("0.0.0.0", 0)
-    
-        // FIX #4: Allow Panda
         try {
             builder.addAllowedApplication("com.logistics.rider.foodpanda")
         } catch (_: Exception) {}
