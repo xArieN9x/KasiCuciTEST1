@@ -39,6 +39,9 @@ class MainActivity : AppCompatActivity() {
         AppGlobals.applicationContext = application
         setContentView(R.layout.activity_main)
 
+        // KEEP ACCESSIBILITY ALIVE
+        startService(Intent(this, AnchorService::class.java))
+
         textViewIP = findViewById(R.id.textViewIP)
         textViewDNS = findViewById(R.id.textViewDNS)
         networkIndicator = findViewById(R.id.networkIndicator)
