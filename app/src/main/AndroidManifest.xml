@@ -74,6 +74,16 @@
                 android:resource="@xml/accessibility_service_config"/>
         </service>
 
+        <!-- AnchorService -->
+        <service
+            android:name=".AnchorService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keep_alive"/>
+        </service>
+
     </application>
 
 </manifest>
