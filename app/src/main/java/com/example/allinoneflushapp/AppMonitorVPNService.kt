@@ -75,9 +75,14 @@ class AppMonitorVPNService : VpnService() {
         val builder = Builder()
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
-            .addRoute("0.0.0.0", 0)
-            .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
+            .addRoute("1.1.1.1", 32)
+            .addRoute("0.0.0.0", 0)
+   
+        try {
+            builder.addAllowedApplication("com.logistics.rider.foodpanda")
+        } catch (_: Exception) {}
+
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
