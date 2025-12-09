@@ -60,6 +60,10 @@ class AccessibilityAutomationService : AccessibilityService() {
                 // toggle OFF
                 svc.findAndClick("Airplane mode", "Airplane mode ", "Airplane", "Mod Pesawat", "Mod Penerbangan")
                 svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                // Launch Foodpanda selepas 2 saat (bagi masa sistem stabil)
+                handler.postDelayed({
+                    AppGlobals.accessibilityService?.launchPandaApp()
+                }, 2000)
             }, 700)
         }
     }
@@ -77,6 +81,20 @@ class AccessibilityAutomationService : AccessibilityService() {
     fun findAndClick(vararg keys: Array<String>): Boolean {
         // not used; kept for compatibility
         return false
+    }
+
+    // ===========================================
+    // Auto Launch Panda App Helper
+    // ===========================================
+    fun launchPandaApp() {
+        try {
+            val pkg = "com.logistics.rider.foodpanda"
+            val launch = packageManager.getLaunchIntentForPackage(pkg)
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(launch)
+            }
+        } catch (_: Exception) {}
     }
 
     fun findAndClick(vararg keys: String, maxRetries: Int = 6, delayMs: Long = 700L): Boolean {
