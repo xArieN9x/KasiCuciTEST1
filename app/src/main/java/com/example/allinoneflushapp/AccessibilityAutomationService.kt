@@ -35,13 +35,21 @@ class AccessibilityAutomationService : AccessibilityService() {
                     // Confirm dialog
                     handler.postDelayed({ svc.findAndClick(*confirmOkKeys) }, 700)
                 }
-                // Go to Storage then Clear cache
+                
+                // ✅ FIX: Wait force stop complete, then go to Storage
                 handler.postDelayed({
-                    svc.findAndClick(*storageKeys)
-                    // ✅ FIXED: 900ms → 1500ms (give time for screen to load)
-                    handler.postDelayed({ svc.findAndClick(*clearCacheKeys) }, 1500)
-                    handler.postDelayed({ svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }, 2700)
-                }, 1600)
+                    val storageClicked = svc.findAndClick(*storageKeys)
+                    if (storageClicked) {
+                        // ✅ FIX: Wait screen load + clear cache with enough time
+                        handler.postDelayed({ 
+                            svc.findAndClick(*clearCacheKeys)
+                            // ✅ FIX: Back AFTER clear cache definitely done (5sec buffer)
+                            handler.postDelayed({ 
+                                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) 
+                            }, 4000)
+                        }, 1500)
+                    }
+                }, 1800)
             }, 1200)
         }
 
@@ -58,7 +66,11 @@ class AccessibilityAutomationService : AccessibilityService() {
                 SystemClock.sleep(AIRPLANE_DELAY)
                 // Click airplane OFF
                 svc.findAndClick("Airplane mode", "Airplane mode ", "Airplane", "Mod Pesawat", "Mod Penerbangan", maxRetries = 3)
-                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                // ✅ FIX: Close Quick Settings to bring CB back
+                svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK)
+                handler.postDelayed({
+                    svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
+                }, 300)
             }, 700)
         }
     }
@@ -72,7 +84,6 @@ class AccessibilityAutomationService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ✅ OPTIMIZED: Reduce retry dari 6 → 3 untuk speed
     fun findAndClick(vararg keys: String, maxRetries: Int = 3, delayMs: Long = 700L): Boolean {
         repeat(maxRetries) {
             val root = rootInActiveWindow
