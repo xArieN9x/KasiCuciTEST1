@@ -27,9 +27,7 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            // user granted vpn permission; start service
             startService(Intent(this, AppMonitorVPNService::class.java))
-            // tell service to establish with current dns
             AppMonitorVPNService.rotateDNS(dnsList)
         }
     }
@@ -38,9 +36,6 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         AppGlobals.applicationContext = application
         setContentView(R.layout.activity_main)
-
-        // KEEP ACCESSIBILITY ALIVE
-        startService(Intent(this, AnchorService::class.java))
 
         textViewIP = findViewById(R.id.textViewIP)
         textViewDNS = findViewById(R.id.textViewDNS)
@@ -61,7 +56,6 @@ class MainActivity : AppCompatActivity() {
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
         } else {
-            // already granted
             startService(Intent(this, AppMonitorVPNService::class.java))
             AppMonitorVPNService.rotateDNS(dnsList)
         }
@@ -99,20 +93,44 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun doAllJobSequence() {
-        // 1. Force stop Panda + clear cache (accessibility)
+        // 1. Force stop Panda + clear cache
         AccessibilityAutomationService.requestClearAndForceStop(pandaPackage)
 
-        // 2. Toggle airplane (after a short delay to allow force-stop)
         CoroutineScope(Dispatchers.Main).launch {
-            delay(3000)
+            // ✅ OPTIMIZED: 3000ms → 2500ms (faster flow)
+            delay(2500)
+            
+            // 2. Toggle airplane
             AccessibilityAutomationService.requestToggleAirplane()
-            // 3. Wait for airplane cycle and network recovery then start/refresh VPN
-            delay(11000) // 8 sec ON + some buffer
+            
+            // ✅ OPTIMIZED: 7000ms → 5000ms (network recovery faster)
+            delay(5000)
+            
+            // 3. Setup VPN
             requestVpnPermission()
-            // 4. After VPN ready, rotate DNS and refresh IP
-            delay(2000)
+            
+            // ✅ OPTIMIZED: 2000ms → 1000ms (tunnel establish faster)
+            delay(1000)
+            
+            // 4. Rotate DNS & refresh IP
             rotateDNS()
             updateIP()
+            
+            // 5. Launch Panda app immediately
+            delay(500)
+            launchPandaApp()
+        }
+    }
+
+    private fun launchPandaApp() {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage(pandaPackage)
+            if (intent != null) {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            }
+        } catch (e: Exception) {
+            // Panda not installed or error
         }
     }
 }
