@@ -9,17 +9,16 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import androidx.annotation.RequiresApi
 
 class AccessibilityAutomationService : AccessibilityService() {
 
     companion object {
         private val handler = Handler(Looper.getMainLooper())
-        private const val AIRPLANE_DELAY = 8000L
+        private const val AIRPLANE_DELAY = 4000L
         private val storageKeys = arrayOf("Storage usage", "Storage usage ", "Storage", "Storage & cache", "App storage")
-        private val forceStopKeys = arrayOf("Force stop", "Force stop ", "Force Stop", "Force Stop ", "Paksa berhenti", "Paksa Hentikan")
+        private val forceStopKeys = arrayOf("Force stop", "Force stop ", "Force Stop", "Paksa berhenti", "Paksa Hentikan")
         private val confirmOkKeys = arrayOf("OK", "Yes", "Confirm", "Ya", "Force stop ", "Force stop")
-        private val clearCacheKeys = arrayOf("Clear cache", "Clear cache ", "Clear Cache", "Clear Cache ", "Kosongkan cache")
+        private val clearCacheKeys = arrayOf("Clear cache", "Clear cache ", "Clear Cache", "Kosongkan cache")
 
         fun requestClearAndForceStop(packageName: String) {
             val ctx = AppGlobals.applicationContext
@@ -30,17 +29,18 @@ class AccessibilityAutomationService : AccessibilityService() {
 
             handler.postDelayed({
                 val svc = AppGlobals.accessibilityService ?: return@postDelayed
-                // Click Force Stop in app info
+                // Click Force Stop
                 val clicked = svc.findAndClick(*forceStopKeys)
                 if (clicked) {
-                    // Confirm dialog - choose Force stop on dialog
+                    // Confirm dialog
                     handler.postDelayed({ svc.findAndClick(*confirmOkKeys) }, 700)
                 }
-                // After force stop, go to Storage usage then Clear cache
+                // Go to Storage then Clear cache
                 handler.postDelayed({
                     svc.findAndClick(*storageKeys)
-                    handler.postDelayed({ svc.findAndClick(*clearCacheKeys) }, 900)
-                    handler.postDelayed({ svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }, 1500)
+                    // ✅ FIXED: 900ms → 1500ms (give time for screen to load)
+                    handler.postDelayed({ svc.findAndClick(*clearCacheKeys) }, 1500)
+                    handler.postDelayed({ svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) }, 2700)
                 }, 1600)
             }, 1200)
         }
@@ -49,21 +49,16 @@ class AccessibilityAutomationService : AccessibilityService() {
             val svc = AppGlobals.accessibilityService ?: return
             svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS)
             handler.postDelayed({
-                // Try a few localized labels
-                val clicked = svc.findAndClick("Airplane mode", "Airplane mode ", "Airplane", "Mod Pesawat", "Mod Penerbangan", "Aeroplane mode")
+                // Click airplane ON
+                val clicked = svc.findAndClick("Airplane mode", "Airplane mode ","Airplane", "Mod Pesawat", "Mod Penerbangan", "Aeroplane mode", maxRetries = 3)
                 if (!clicked) {
-                    // fallback: try icon desc scanning
-                    svc.findAndClick("Airplane")
+                    svc.findAndClick("Airplane", maxRetries = 3)
                 }
-                // wait ON
+                // Wait ON
                 SystemClock.sleep(AIRPLANE_DELAY)
-                // toggle OFF
-                svc.findAndClick("Airplane mode", "Airplane mode ", "Airplane", "Mod Pesawat", "Mod Penerbangan")
+                // Click airplane OFF
+                svc.findAndClick("Airplane mode", "Airplane mode ", "Airplane", "Mod Pesawat", "Mod Penerbangan", maxRetries = 3)
                 svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
-                // Launch Foodpanda selepas 2 saat (bagi masa sistem stabil)
-                handler.postDelayed({
-                    AppGlobals.accessibilityService?.launchPandaApp()
-                }, 2000)
             }, 700)
         }
     }
@@ -77,32 +72,13 @@ class AccessibilityAutomationService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // Robust search + click using text, content description, viewId
-    fun findAndClick(vararg keys: Array<String>): Boolean {
-        // not used; kept for compatibility
-        return false
-    }
-
-    // ===========================================
-    // Auto Launch Panda App Helper
-    // ===========================================
-    fun launchPandaApp() {
-        try {
-            val pkg = "com.logistics.rider.foodpanda"
-            val launch = packageManager.getLaunchIntentForPackage(pkg)
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivity(launch)
-            }
-        } catch (_: Exception) {}
-    }
-
-    fun findAndClick(vararg keys: String, maxRetries: Int = 6, delayMs: Long = 700L): Boolean {
+    // ✅ OPTIMIZED: Reduce retry dari 6 → 3 untuk speed
+    fun findAndClick(vararg keys: String, maxRetries: Int = 3, delayMs: Long = 700L): Boolean {
         repeat(maxRetries) {
             val root = rootInActiveWindow
             if (root != null) {
                 for (k in keys) {
-                    // exact text matches
+                    // Exact text matches
                     val nodes = root.findAccessibilityNodeInfosByText(k)
                     if (!nodes.isNullOrEmpty()) {
                         for (n in nodes) {
@@ -114,10 +90,10 @@ class AccessibilityAutomationService : AccessibilityService() {
                             }
                         }
                     }
-                    // content-desc scan
+                    // Content-desc scan
                     val desc = findNodeByDescription(root, k)
                     if (desc != null) { desc.performAction(AccessibilityNodeInfo.ACTION_CLICK); return true }
-                    // viewId fallback
+                    // ViewId fallback
                     val idNode = findNodeByViewId(root, k)
                     if (idNode != null) {
                         if (idNode.isClickable) { idNode.performAction(AccessibilityNodeInfo.ACTION_CLICK); return true }
@@ -128,7 +104,7 @@ class AccessibilityAutomationService : AccessibilityService() {
                         }
                     }
                 }
-                // try scroll to reveal hidden buttons
+                // Try scroll to reveal
                 root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
             }
             Thread.sleep(delayMs)
