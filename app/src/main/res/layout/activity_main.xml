@@ -2,53 +2,154 @@
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp">
+    android:padding="16dp"
+    android:background="#F5F5F5">
 
+    <!-- Title -->
+    <TextView
+        android:id="@+id/textViewTitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="CedokBooster"
+        android:textSize="24sp"
+        android:textStyle="bold"
+        android:textColor="#1976D2"
+        android:layout_alignParentTop="true"
+        android:layout_centerHorizontal="true"
+        android:layout_marginTop="8dp"/>
+
+    <!-- IP Display -->
     <TextView
         android:id="@+id/textViewIP"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="Public IP: ..."
-        android:textSize="18sp"
-        android:layout_alignParentTop="true"
+        android:textSize="16sp"
+        android:textColor="#424242"
+        android:layout_below="@id/textViewTitle"
+        android:layout_marginTop="24dp"
         android:layout_centerHorizontal="true"/>
 
+    <!-- DNS Display -->
     <TextView
         android:id="@+id/textViewDNS"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="DNS: ..."
-        android:textSize="18sp"
+        android:textSize="16sp"
+        android:textColor="#424242"
         android:layout_below="@id/textViewIP"
         android:layout_marginTop="12dp"
         android:layout_centerHorizontal="true"/>
 
+    <!-- Status Indicator -->
     <ImageView
         android:id="@+id/networkIndicator"
-        android:layout_width="30dp"
-        android:layout_height="30dp"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
         android:layout_below="@id/textViewDNS"
-        android:layout_marginTop="16dp"
+        android:layout_marginTop="20dp"
         android:layout_centerHorizontal="true"
         android:src="@drawable/red_circle"/>
 
+    <!-- Main Action Button -->
     <Button
         android:id="@+id/btnDoAllJob"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Do All Job"
+        android:text="DO ALL JOB"
+        android:textSize="16sp"
+        android:textStyle="bold"
         android:layout_below="@id/networkIndicator"
-        android:layout_marginTop="24dp"
+        android:layout_marginTop="32dp"
         android:layout_centerHorizontal="true"
-        android:padding="12dp"/>
+        android:paddingLeft="32dp"
+        android:paddingRight="32dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:backgroundTint="#4CAF50"/>
 
-    <Button
-        android:id="@+id/btnStartVpn"
+    <!-- Separator Line -->
+    <View
+        android:id="@+id/separator"
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:layout_below="@id/btnDoAllJob"
+        android:layout_marginTop="40dp"
+        android:background="#BDBDBD"/>
+
+    <!-- Small Label -->
+    <TextView
+        android:id="@+id/labelControls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Start VPN (Grant perm)"
-        android:layout_below="@id/btnDoAllJob"
+        android:text="Quick Controls"
+        android:textSize="12sp"
+        android:textColor="#757575"
+        android:layout_below="@id/separator"
+        android:layout_marginTop="16dp"
+        android:layout_centerHorizontal="true"/>
+
+    <!-- Button Container -->
+    <LinearLayout
+        android:id="@+id/buttonContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_below="@id/labelControls"
         android:layout_marginTop="12dp"
-        android:layout_centerHorizontal="true"
-        android:padding="8dp"/>
+        android:layout_centerHorizontal="true">
+
+        <!-- ON Button (Accessibility) -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:layout_marginRight="24dp">
+
+            <Button
+                android:id="@+id/btnAccessibilityOn"
+                android:layout_width="70dp"
+                android:layout_height="70dp"
+                android:text="ON"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:backgroundTint="#4CAF50"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Accessibility"
+                android:textSize="10sp"
+                android:textColor="#616161"
+                android:layout_marginTop="4dp"/>
+        </LinearLayout>
+
+        <!-- OFF Button (Force Close) -->
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:gravity="center">
+
+            <Button
+                android:id="@+id/btnForceCloseAll"
+                android:layout_width="70dp"
+                android:layout_height="70dp"
+                android:text="OFF"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:backgroundTint="#F44336"/>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Force Close"
+                android:textSize="10sp"
+                android:textColor="#616161"
+                android:layout_marginTop="4dp"/>
+        </LinearLayout>
+    </LinearLayout>
+
 </RelativeLayout>
