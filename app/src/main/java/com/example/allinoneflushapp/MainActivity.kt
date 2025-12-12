@@ -182,15 +182,16 @@ class MainActivity : AppCompatActivity() {
             delay(5500)
             bringAppToForeground()
             delay(500)
-
-            Toast.makeText(this@MainActivity, "Setting up VPN tunnel...", Toast.LENGTH_SHORT).show()
-            requestVpnPermission()
-            delay(3500) // ✅ Delay untuk stabil
-
-            rotateDNS()
-            delay(3000) // ✅ Delay IP (FIX #4)
+    
+            // ✅ FETCH IP DULU SEBELUM START VPN
             updateIP()
             delay(1000)
+    
+            Toast.makeText(this@MainActivity, "Setting up VPN tunnel...", Toast.LENGTH_SHORT).show()
+            requestVpnPermission()
+            delay(2500)
+    
+            rotateDNS()
             launchPandaApp()
             delay(2000)
             checkAndStartFloatingWidget()
