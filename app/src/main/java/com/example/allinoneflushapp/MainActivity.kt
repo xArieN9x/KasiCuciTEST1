@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnForceCloseAll: Button
 
     private val pandaPackage = "com.logistics.rider.foodpanda"
-    private val dnsList = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "9.9.9.10")
+    private val dnsList = listOf("1.1.1.1", "156.154.70.1", "8.8.8.8", "76.76.2.0")
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -213,9 +213,11 @@ class MainActivity : AppCompatActivity() {
             // Wait VPN establish
             delay(2000)
             
-            // 4. Rotate DNS & refresh IP
+            // 4. Rotate DNS
             rotateDNS()
-            delay(500)
+            
+            // ✅ FIX #4: Delay IP update (wait network stable)
+            delay(3000)
             updateIP()
             
             // 5. Launch Panda app
