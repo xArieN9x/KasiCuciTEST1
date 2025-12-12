@@ -151,9 +151,23 @@ class MainActivity : AppCompatActivity() {
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
         } else {
-            Toast.makeText(this, "Setting up VPN...", Toast.LENGTH_SHORT).show()
-            startService(Intent(this, AppMonitorVPNService::class.java))
-            AppMonitorVPNService.rotateDNS(dnsList)
+            actuallyStartVpnService()
+        }
+    }
+    
+    private fun actuallyStartVpnService() {
+        stopService(Intent(this, AppMonitorVPNService::class.java))
+        startService(Intent(this, AppMonitorVPNService::class.java))
+        AppMonitorVPNService.rotateDNS(dnsList)
+    }
+    
+    private val vpnPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            actuallyStartVpnService()
+        } else {
+            Toast.makeText(this, "VPN permission required", Toast.LENGTH_SHORT).show()
         }
     }
 
