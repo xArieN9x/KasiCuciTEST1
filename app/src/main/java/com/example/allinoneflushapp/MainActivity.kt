@@ -144,9 +144,23 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateIP() {
         CoroutineScope(Dispatchers.IO).launch {
-            val ip = try {
-                URL("https://api.ipify.org").readText().trim()
-            } catch (e: Exception) { null }
+            val apis = listOf(
+                "https://api.ipify.org",
+                "https://icanhazip.com",
+                "https://ifconfig.me/ip"
+            )
+            var ip: String? = null
+            for (api in apis) {
+                try {
+                    val result = URL(api).readText().trim()
+                    if (result.isNotEmpty()) {
+                        ip = result
+                        break
+                    }
+                } catch (e: Exception) {
+                    continue
+                }
+            }
             withContext(Dispatchers.Main) {
                 textViewIP.text = if (ip.isNullOrEmpty()) "Public IP: —" else "Public IP: $ip"
             }
@@ -189,11 +203,11 @@ class MainActivity : AppCompatActivity() {
             delay(1500)
             Toast.makeText(this@MainActivity, "Setting up VPN tunnel...", Toast.LENGTH_SHORT).show()
             requestVpnPermission()
-            delay(2500)
+            delay(2100)
     
             rotateDNS()
             launchPandaApp()
-            delay(2000)
+            delay(1500)
             checkAndStartFloatingWidget()
         }
     }
