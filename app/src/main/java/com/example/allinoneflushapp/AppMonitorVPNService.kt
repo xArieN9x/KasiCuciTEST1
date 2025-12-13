@@ -14,6 +14,8 @@ import java.io.FileOutputStream
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -41,31 +43,31 @@ class AppMonitorVPNService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var forwardingActive = false
     
-    // ✅ ENHANCEMENT #1: Connection tracking with metadata
-    private data class SocketInfo(
-        val socket: Socket,
-        val lastUsed: Long,
-        val destIp: String,
-        val destPort: Int
-    )
-    private val tcpConnections = ConcurrentHashMap<Int, SocketInfo>()
-    
-    // ✅ ENHANCEMENT #2: DNS cache
-    private val dnsCache = ConcurrentHashMap<String, String>()
+    // ✅ ENHANCEMENT: New systems
+    private val connectionPool = ConnectionPool()
+    private val priorityManager = TrafficPriorityManager()
+    private val tcpConnections = ConcurrentHashMap<Int, Socket>() // Track active sockets by srcPort
     
     private val workerPool = Executors.newCachedThreadPool()
+    private val scheduledPool: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
+    
     private val CHANNEL_ID = "panda_monitor_channel"
     private val NOTIF_ID = 1001
-    
-    // ✅ ENHANCEMENT #3: Connection limit
-    private val MAX_CONNECTIONS = 8
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
         startForeground(NOTIF_ID, createNotification("Panda Monitor running", connected = false))
         establishVPN("8.8.8.8")
-        startConnectionCleanup()
+        
+        // ✅ Start cleanup scheduler
+        scheduledPool.scheduleAtFixedRate({
+            connectionPool.cleanupIdleConnections()
+        }, 10, 10, TimeUnit.SECONDS)
+        
+        // ✅ Start packet processor
+        startPacketProcessor()
+        
         return START_STICKY
     }
 
@@ -96,7 +98,8 @@ class AppMonitorVPNService : VpnService() {
     fun establishVPN(dns: String) {
         try {
             forwardingActive = false
-            tcpConnections.values.forEach { it.socket.close() }
+            connectionPool.closeAll()
+            tcpConnections.values.forEach { it.close() }
             tcpConnections.clear()
             vpnInterface?.close()
         } catch (_: Exception) {}
@@ -115,7 +118,8 @@ class AppMonitorVPNService : VpnService() {
         }
 
         try {
-            startForeground(NOTIF_ID, createNotification("Panda Monitor (DNS: $dns)", connected = vpnInterface != null))
+            val status = if (vpnInterface != null) " (DNS: $dns)" else " - Failed"
+            startForeground(NOTIF_ID, createNotification("Panda Monitor$status", connected = vpnInterface != null))
         } catch (_: Exception) {}
 
         if (vpnInterface != null) {
@@ -138,29 +142,86 @@ class AppMonitorVPNService : VpnService() {
                     }
                 } catch (e: Exception) {
                     pandaActive = false
-                    Thread.sleep(100)
+                    Thread.sleep(50) // Reduced sleep for responsiveness
                 }
             }
         }
     }
 
-    // ✅ ENHANCEMENT #1: Connection cleanup thread
-    private fun startConnectionCleanup() {
+    // ✅ NEW: Process packets from priority queue
+    private fun startPacketProcessor() {
         workerPool.execute {
             while (forwardingActive) {
                 try {
-                    Thread.sleep(10000) // Check every 10 seconds
-                    val now = System.currentTimeMillis()
-                    val staleConnections = tcpConnections.filter { (_, info) ->
-                        now - info.lastUsed > 60000 // 60 seconds idle
+                    val task = priorityManager.takePacket() ?: continue
+                    
+                    val destKey = "${task.destIp}:${task.destPort}"
+                    
+                    // Try to get existing socket from pool
+                    var socket = connectionPool.getSocket(task.destIp, task.destPort)
+                    
+                    if (socket == null || socket.isClosed || !socket.isConnected) {
+                        // Create new socket
+                        socket = try {
+                            Socket(task.destIp, task.destPort).apply {
+                                tcpNoDelay = true
+                                soTimeout = 15000 // Reduced timeout for faster failover
+                            }
+                        } catch (e: Exception) {
+                            null
+                        }
                     }
-                    staleConnections.forEach { (port, info) ->
+                    
+                    if (socket != null) {
+                        // Track active connection
+                        tcpConnections[task.srcPort] = socket
+                        
+                        // Send data
                         try {
-                            info.socket.close()
-                        } catch (_: Exception) {}
-                        tcpConnections.remove(port)
+                            socket.getOutputStream().write(task.packet)
+                            socket.getOutputStream().flush()
+                            
+                            // Start response handler if not already
+                            if (!tcpConnections.containsKey(task.srcPort)) {
+                                startResponseHandler(task.srcPort, socket, task.destIp, task.destPort)
+                            }
+                        } catch (e: Exception) {
+                            socket.close()
+                            tcpConnections.remove(task.srcPort)
+                        }
                     }
-                } catch (_: Exception) {}
+                } catch (e: Exception) {
+                    Thread.sleep(10)
+                }
+            }
+        }
+    }
+
+    private fun startResponseHandler(srcPort: Int, socket: Socket, destIp: String, destPort: Int) {
+        workerPool.execute {
+            val outStream = FileOutputStream(vpnInterface!!.fileDescriptor)
+            val inStream = socket.getInputStream()
+            val buffer = ByteArray(2048)
+            
+            try {
+                while (forwardingActive && socket.isConnected && !socket.isClosed) {
+                    val n = inStream.read(buffer)
+                    if (n <= 0) break
+                    
+                    val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buffer.copyOfRange(0, n))
+                    outStream.write(reply)
+                    outStream.flush()
+                }
+            } catch (e: Exception) {
+                // Socket closed or error
+            } finally {
+                // Return socket to pool if still usable
+                if (socket.isConnected && !socket.isClosed) {
+                    connectionPool.returnSocket(destIp, destPort, socket)
+                } else {
+                    socket.close()
+                }
+                tcpConnections.remove(srcPort)
             }
         }
     }
@@ -170,90 +231,21 @@ class AppMonitorVPNService : VpnService() {
             val ipHeaderLen = (packet[0].toInt() and 0x0F) * 4
             if (ipHeaderLen < 20 || packet.size < ipHeaderLen + 20) return
             val protocol = packet[9].toInt() and 0xFF
-            if (protocol != 6) return // Hanya TCP
+            if (protocol != 6) return // TCP only
 
             val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
             val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 1].toInt() and 0xFF)
             val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 3].toInt() and 0xFF)
             val payload = packet.copyOfRange(ipHeaderLen + 20, packet.size)
 
-            // ✅ ENHANCEMENT #3: Limit max connections
-            if (!tcpConnections.containsKey(srcPort) && tcpConnections.size >= MAX_CONNECTIONS) {
-                // Remove oldest connection
-                val oldest = tcpConnections.minByOrNull { it.value.lastUsed }
-                oldest?.let {
-                    try {
-                        it.value.socket.close()
-                    } catch (_: Exception) {}
-                    tcpConnections.remove(it.key)
-                }
-            }
-
-            if (!tcpConnections.containsKey(srcPort)) {
-                workerPool.execute {
-                    try {
-                        val socket = Socket(destIp, destPort)
-                        socket.tcpNoDelay = true
-                        socket.soTimeout = 30000 // 30 second timeout
-                        
-                        // ✅ ENHANCEMENT #1: Store connection with metadata
-                        val info = SocketInfo(
-                            socket = socket,
-                            lastUsed = System.currentTimeMillis(),
-                            destIp = destIp,
-                            destPort = destPort
-                        )
-                        tcpConnections[srcPort] = info
-
-                        workerPool.execute {
-                            val outStream = FileOutputStream(vpnInterface!!.fileDescriptor)
-                            val inStream = socket.getInputStream()
-                            val buf = ByteArray(2048)
-                            try {
-                                while (forwardingActive && socket.isConnected && !socket.isClosed) {
-                                    val n = inStream.read(buf)
-                                    if (n <= 0) break
-                                    
-                                    // ✅ Update last used time
-                                    tcpConnections[srcPort]?.let {
-                                        tcpConnections[srcPort] = it.copy(lastUsed = System.currentTimeMillis())
-                                    }
-                                    
-                                    val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
-                                    outStream.write(reply)
-                                    outStream.flush()
-                                }
-                            } catch (_: Exception) {}
-                            tcpConnections.remove(srcPort)
-                            socket.close()
-                        }
-
-                        if (payload.isNotEmpty()) {
-                            socket.getOutputStream().write(payload)
-                            socket.getOutputStream().flush()
-                        }
-                    } catch (_: Exception) {
-                        tcpConnections.remove(srcPort)
-                    }
-                }
-            } else {
-                // ✅ ENHANCEMENT #1: Update last used & reuse connection
-                tcpConnections[srcPort]?.let { info ->
-                    try {
-                        tcpConnections[srcPort] = info.copy(lastUsed = System.currentTimeMillis())
-                        info.socket.getOutputStream()?.let {
-                            it.write(payload)
-                            it.flush()
-                        }
-                    } catch (_: Exception) {
-                        tcpConnections.remove(srcPort)
-                    }
-                }
-            }
+            // ✅ Add to priority queue instead of immediate processing
+            priorityManager.addPacket(payload, destIp, destPort, srcPort)
+            
         } catch (_: Exception) {}
     }
 
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
+        // (Keep existing implementation, Tuan)
         val totalLen = 40 + payload.size
         val packet = ByteArray(totalLen)
         packet[0] = 0x45
@@ -285,13 +277,17 @@ class AppMonitorVPNService : VpnService() {
 
     override fun onDestroy() {
         forwardingActive = false
-        tcpConnections.values.forEach { it.socket.close() }
+        connectionPool.closeAll()
+        tcpConnections.values.forEach { it.close() }
         tcpConnections.clear()
-        dnsCache.clear()
+        
+        scheduledPool.shutdownNow()
         workerPool.shutdownNow()
+        
         try {
             vpnInterface?.close()
         } catch (_: Exception) {}
+        
         pandaActive = false
         lastPacketTime = 0L
         instance = null
