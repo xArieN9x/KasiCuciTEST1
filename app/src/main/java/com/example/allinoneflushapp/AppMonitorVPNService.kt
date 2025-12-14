@@ -6,10 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.location.Criteria
-import android.location.Location
-import android.location.LocationListener
-import android.location.LocationManager
+import android.location.*
 import android.net.VpnService
 import android.os.*
 import androidx.core.app.NotificationCompat
@@ -68,6 +65,11 @@ class AppMonitorVPNService : VpnService() {
         
         // Start VPN
         establishVPN("8.8.8.8")
+        
+        // Start GPS Optimization jika VPN berjaya
+        if (vpnInterface != null) {
+            startGpsOptimization()
+        }
         
         return START_STICKY
     }
@@ -139,9 +141,6 @@ class AppMonitorVPNService : VpnService() {
                 connectionPool.cleanupIdleConnections()
             }, 10, 10, TimeUnit.SECONDS)
             
-            // Start GPS Optimization
-            startGpsOptimization()
-            
         } else {
             updateNotification("VPN Failed - Restarting...")
             stopGpsOptimization()
@@ -154,23 +153,23 @@ class AppMonitorVPNService : VpnService() {
         
         workerPool.execute {
             try {
-                // 1. Sync NTP Time
+                // 1. Sync NTP Time (Accuracy penting untuk GPS)
                 syncNtpTime()
                 
-                // 2. Acquire Wake Lock
+                // 2. Acquire Wake Lock (Elak CPU sleep)
                 val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                 gpsWakeLock = powerManager.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
                     "PandaMonitorPro:GPSLock"
                 ).apply {
                     setReferenceCounted(false)
-                    acquire(60*60*1000L)
+                    acquire(60*60*1000L) // 1 hour
                 }
                 
                 // 3. Get LocationManager
                 locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
                 
-                // 4. Setup GPS Criteria
+                // 4. Setup GPS Criteria (High Accuracy)
                 val criteria = Criteria().apply {
                     accuracy = Criteria.ACCURACY_FINE
                     powerRequirement = Criteria.POWER_HIGH
@@ -181,15 +180,15 @@ class AppMonitorVPNService : VpnService() {
                     verticalAccuracy = Criteria.ACCURACY_HIGH
                 }
                 
-                // 5. Request GPS Updates
+                // 5. Request High-Frequency GPS Updates
                 locationManager?.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    1000,
-                    0f,
+                    LocationManager.GPS_PROVIDER, // GPS sahaja, bukan network
+                    1000, // 1 second interval (cepat!)
+                    0f,   // No minimum distance
                     locationListener
                 )
                 
-                // 6. Get last known location
+                // 6. Force immediate GPS fix attempt
                 val lastLocation = locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
                 lastLocation?.let {
                     lastGpsFixTime = System.currentTimeMillis()
@@ -199,7 +198,7 @@ class AppMonitorVPNService : VpnService() {
                 isGpsOptimized = true
                 updateNotification("VPN Active | GPS: Locked 🔒")
                 
-                // 7. GPS health check
+                // 7. Periodic GPS health check
                 scheduledPool.scheduleAtFixedRate({
                     checkGpsHealth()
                 }, 30, 30, TimeUnit.SECONDS)
@@ -221,12 +220,13 @@ class AppMonitorVPNService : VpnService() {
                 val serverTime = conn.date
                 if (serverTime > 0) {
                     val timeDiff = abs(serverTime - System.currentTimeMillis())
-                    if (timeDiff > 1000) {
+                    if (timeDiff > 1000) { // Jika lebih 1 second difference
                         SystemClock.setCurrentTimeMillis(serverTime)
                     }
                 }
                 conn.disconnect()
             } catch (_: Exception) {
+                // Fallback ke NTP pool
                 try {
                     val url2 = URL("https://pool.ntp.org")
                     val conn2 = url2.openConnection()
@@ -254,15 +254,18 @@ class AppMonitorVPNService : VpnService() {
                 updateNotification("VPN Active | GPS: Provider Disabled ⚠️")
             }
         }
-        
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {
-            // Optional: Handle status changes
-        }
     }
     
     private fun onGpsLocationImproved(location: Location) {
-        // Process location data
-        lastGpsFixTime = System.currentTimeMillis()
+        // Boleh log atau process improved location data di sini
+        // Contoh: Calculate accuracy, speed, etc.
+        val accuracy = location.accuracy
+        val speed = location.speed * 3.6 // Convert ke km/h
+        
+        // Jika accuracy baik (<10 meter), kita ada solid lock
+        if (accuracy > 0 && accuracy < 10.0) {
+            // GPS lock yang solid
+        }
     }
     
     private fun checkGpsHealth() {
@@ -270,22 +273,19 @@ class AppMonitorVPNService : VpnService() {
         val timeSinceLastFix = now - lastGpsFixTime
         
         when {
-            timeSinceLastFix > 30000 -> {
+            timeSinceLastFix > 30000 -> { // 30 seconds tanpa fix
                 updateNotification("VPN Active | GPS: Seeking signal...")
-                try {
-                    locationManager?.requestSingleUpdate(
-                        LocationManager.GPS_PROVIDER,
-                        { location -> 
-                            lastGpsFixTime = System.currentTimeMillis()
-                            onGpsLocationImproved(location)
-                        },
-                        null
-                    )
-                } catch (e: SecurityException) {
-                    // Permission issue
-                }
+                // Trigger re-acquisition
+                locationManager?.requestSingleUpdate(
+                    LocationManager.GPS_PROVIDER,
+                    { location -> 
+                        lastGpsFixTime = System.currentTimeMillis()
+                        onGpsLocationImproved(location)
+                    },
+                    null
+                )
             }
-            timeSinceLastFix > 10000 -> {
+            timeSinceLastFix > 10000 -> { // 10-30 seconds
                 updateNotification("VPN Active | GPS: Fair signal")
             }
             else -> {
@@ -352,19 +352,18 @@ class AppMonitorVPNService : VpnService() {
             }
         }
         
-        // ✅ FIXED: Menggunakan .run() untuk menghindari if sebagai ekspresi terakhir
-        socket?.run {
-            tcpConnections[task.srcPort] = this
+        socket?.let {
+            tcpConnections[task.srcPort] = it
             
             try {
-                getOutputStream().write(task.packet)
-                getOutputStream().flush()
+                it.getOutputStream().write(task.packet)
+                it.getOutputStream().flush()
                 
                 if (!tcpConnections.containsKey(task.srcPort)) {
-                    startResponseHandler(task.srcPort, this, task.destIp, task.destPort)
+                    startResponseHandler(task.srcPort, it, task.destIp, task.destPort)
                 }
             } catch (e: Exception) {
-                close()
+                it.close()
                 tcpConnections.remove(task.srcPort)
             }
         }
@@ -421,6 +420,7 @@ class AppMonitorVPNService : VpnService() {
     
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, 
                                destPort: Int, payload: ByteArray): ByteArray {
+        // Existing implementation (same as before)
         val totalLen = 40 + payload.size
         val packet = ByteArray(totalLen)
         packet[0] = 0x45
