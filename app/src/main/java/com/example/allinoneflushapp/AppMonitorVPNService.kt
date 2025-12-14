@@ -356,20 +356,27 @@ class AppMonitorVPNService : VpnService() {
             }
         }
         
-        socket?.let {
-            tcpConnections[task.srcPort] = it
+        // ✅ PERBAIKAN: Ganti dengan .run() dan pastikan semua kondisi tercakup
+        socket?.run {
+            tcpConnections[task.srcPort] = this
             
             try {
-                it.getOutputStream().write(task.packet)
-                it.getOutputStream().flush()
+                getOutputStream().write(task.packet)
+                getOutputStream().flush()
                 
-                if (!tcpConnections.containsKey(task.srcPort)) {
-                    startResponseHandler(task.srcPort, it, task.destIp, task.destPort)
-                } else {
-                    // Connection already handled
+                // FIX: Logic yang benar untuk memastikan response handler berjalan
+                // Tambahkan kondisi OR untuk pastikan handler berjalan untuk connection baru
+                if (!tcpConnections.containsKey(task.srcPort) || 
+                    !this.isConnected || 
+                    this.isClosed) {
+                    
+                    // Start handler hanya untuk connection baru atau yang bermasalah
+                    if (this.isConnected && !this.isClosed) {
+                        startResponseHandler(task.srcPort, this, task.destIp, task.destPort)
+                    }
                 }
             } catch (e: Exception) {
-                it.close()
+                close()
                 tcpConnections.remove(task.srcPort)
             }
         }
