@@ -29,6 +29,9 @@
     <!-- Optional: log scan for debugging -->
     <uses-permission android:name="android.permission.READ_LOGS" />
 
+    <!-- VPN permission (MUST HAVE untuk VPN service) -->
+    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+
     <application
         android:allowBackup="true"
         android:theme="@style/Theme.AppCompat.Light"
@@ -61,7 +64,7 @@
             android:name=".AccessibilityAutomationService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true"
-            android:label="CB Accessibility Engine">
+            android:label="CBP Accessibility Engine">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>
             </intent-filter>
