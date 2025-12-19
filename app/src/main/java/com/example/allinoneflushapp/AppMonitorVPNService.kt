@@ -109,25 +109,19 @@ class AppMonitorVPNService : VpnService() {
     
         val builder = Builder()
         builder.setSession("PandaMonitor")
-            .addAddress("192.168.77.2", 32)
-            // ❌ JANGAN guna .addRoute() - dia tak work
+            .addAddress("10.0.0.2", 32)
+            // ✅ USE SPLIT ROUTES (bypass Android bug)
+            .addRoute("0.0.0.0", 1)      // 0.0.0.0 - 127.255.255.255
+            .addRoute("128.0.0.0", 1)    // 128.0.0.0 - 255.255.255.255
             .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
             .addDnsServer("1.1.1.1")
-            .setMtu(1500)
+            .setMtu(1400)                // Lower MTU (stability)
+            .setBlocking(false)          // Allow fallback
     
         vpnInterface = try {
             val iface = builder.establish()
             android.util.Log.i("CB_VPN", "✅ VPN Interface CREATED")
-            
-            // ✅ SET ROUTING MANUAL SETELAH VPN UP
-            try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "ip route add default dev tun0")).waitFor()
-                android.util.Log.i("CB_VPN", "🎯 MANUAL ROUTE: default → tun0")
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "❌ Failed to set manual route")
-            }
-            
             iface
         } catch (e: Exception) {
             android.util.Log.e("CB_VPN", "❌ VPN Failed: ${e.message}")
