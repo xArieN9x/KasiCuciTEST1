@@ -171,13 +171,13 @@ class AppMonitorVPNService : VpnService() {
                     }
                     
                     if (socket == null || socket.isClosed || !socket.isConnected) {
-                        // Create new socket
+                        // Create new socket - FIXED TYPE
                         socket = try {
-                            Socket(task.destIp, task.destPort).apply {
-                                tcpNoDelay = true
-                                soTimeout = 15000
-                            }
+                            val newSocket = Socket(task.destIp, task.destPort)
+                            newSocket.tcpNoDelay = true
+                            newSocket.soTimeout = 15000
                             android.util.Log.i("CB_DEBUG", "✅ Socket created for $destKey")
+                            newSocket  // ✅ Return Socket object
                         } catch (e: Exception) {
                             android.util.Log.e("CB_DEBUG", "❌ Socket creation failed: ${e.message}")
                             null
