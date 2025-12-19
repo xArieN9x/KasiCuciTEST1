@@ -371,6 +371,32 @@ class AppMonitorVPNService : VpnService() {
         return packet
     }
 
+    private fun checkRoutingStatus() {
+        try {
+            val process = Runtime.getRuntime().exec("ip route show")
+            val reader = java.io.BufferedReader(java.io.InputStreamReader(process.inputStream))
+            var line: String?
+            var hasTun0Route = false
+            
+            while (reader.readLine().also { line = it } != null) {
+                android.util.Log.d("CB_VPN", "🔍 Route: $line")
+                if (line?.contains("tun0") == true) {
+                    hasTun0Route = true
+                    android.util.Log.i("CB_VPN", "🎯 FOUND tun0 in routing table!")
+                }
+            }
+            
+            if (!hasTun0Route) {
+                android.util.Log.w("CB_VPN", "⚠️ WARNING: No tun0 in routing table!")
+                updateNotification("VPN Limited - Routing Issue", false)
+            }
+            
+            reader.close()
+        } catch (e: Exception) {
+            android.util.Log.e("CB_VPN", "❌ Routing check failed: ${e.message}")
+        }
+    }
+
     override fun onDestroy() {
         android.util.Log.d("CB_VPN", "🛑 SERVICE DESTROYING")
         forwardingActive = false
