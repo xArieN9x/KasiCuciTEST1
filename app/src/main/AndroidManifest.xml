@@ -9,28 +9,27 @@
     <!-- Accessibility priority -->
     <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
 
-    <!-- Allow reading package info (helps find nodes in settings) -->
+    <!-- Allow reading package info -->
     <uses-permission
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Usage stats improves stability navigating Settings -->
+    <!-- Usage stats -->
     <uses-permission 
         android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Foreground service for VPN -->
+    <!-- Foreground service -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
-    <!-- For overlay popups (some devices require this) -->
+    <!-- For overlay popups -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- Optional: log scan for debugging -->
+    <!-- Optional: log scan -->
     <uses-permission android:name="android.permission.READ_LOGS" />
 
-    <!-- VPN permission (MUST HAVE untuk VPN service) -->
-    <uses-permission android:name="android.permission.BIND_VPN_SERVICE" />
+    <!-- ❌ TAK ADA BIND_VPN_SERVICE DISINI -->
 
     <application
         android:allowBackup="true"
@@ -49,12 +48,12 @@
             </intent-filter>
         </activity>
 
-        <!-- ✅ VPN service - SUDAH DIBETULKAN -->
+        <!-- ✅ VPN SERVICE ASAL (TANPA BIND_VPN_SERVICE) -->
         <service
             android:name=".AppMonitorVPNService"
             android:exported="false"
-            android:foregroundServiceType="specialUse"
-            android:permission="android.permission.BIND_VPN_SERVICE">  <!-- ✅ INI YANG PERLU -->
+            android:foregroundServiceType="specialUse">
+            <!-- ❌ TAK ADA permission attribute disini -->
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vpn_tunnel"/>
@@ -84,7 +83,7 @@
                 android:value="keep_alive"/>
         </service>
 
-        <!-- NEW: Floating Widget Service -->
+        <!-- Floating Widget Service -->
         <service
             android:name=".FloatingWidgetService"
             android:exported="false"/>
