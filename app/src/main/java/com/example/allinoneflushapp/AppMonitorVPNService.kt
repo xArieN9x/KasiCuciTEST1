@@ -11,14 +11,11 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.InetAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
-import java.io.BufferedReader
-import java.io.InputStreamReader
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -46,10 +43,10 @@ class AppMonitorVPNService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var forwardingActive = false
     
-    // Simple connection tracking
+    // ✅ ENHANCEMENT: New systems
     private val connectionPool = ConnectionPool()
     private val priorityManager = TrafficPriorityManager()
-    private val tcpConnections = ConcurrentHashMap<Int, Socket>()
+    private val tcpConnections = ConcurrentHashMap<Int, Socket>() // Track active sockets by srcPort
     
     private val workerPool = Executors.newCachedThreadPool()
     private val scheduledPool: ScheduledExecutorService = Executors.newScheduledThreadPool(1)
@@ -58,17 +55,17 @@ class AppMonitorVPNService : VpnService() {
     private val NOTIF_ID = 1001
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        android.util.Log.d("CB_VPN", "🚀 VPN SERVICE STARTED")
         instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, createNotification("Panda Monitor - Starting", false))
+        startForeground(NOTIF_ID, createNotification("Panda Monitor running", connected = false))
         establishVPN("8.8.8.8")
         
-        // Simple cleanup every 30 seconds
+        // ✅ Start cleanup scheduler
         scheduledPool.scheduleAtFixedRate({
             connectionPool.cleanupIdleConnections()
-        }, 30, 30, TimeUnit.SECONDS)
+        }, 10, 10, TimeUnit.SECONDS)
         
+        // ✅ Start packet processor
         startPacketProcessor()
         
         return START_STICKY
@@ -99,8 +96,6 @@ class AppMonitorVPNService : VpnService() {
     }
 
     fun establishVPN(dns: String) {
-        android.util.Log.d("CB_VPN", "🔧 Setting up VPN")
-        
         try {
             forwardingActive = false
             connectionPool.closeAll()
@@ -108,74 +103,33 @@ class AppMonitorVPNService : VpnService() {
             tcpConnections.clear()
             vpnInterface?.close()
         } catch (_: Exception) {}
-    
+
         val builder = Builder()
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
-            .addRoute("0.0.0.0", 0) // ✅ 1) FOKUS: Gunakan SATU rute default penuh
+            .addRoute("0.0.0.0", 0)
             .addAllowedApplication("com.logistics.rider.foodpanda")
-            .addDnsServer("208.67.222.222") // ✅ 2) Coba DNS pihak ketiga yang dikenal
-            .addDnsServer("208.67.220.220")
-            .addDnsServer(dns) // Simpan DNS asal sebagai cadangan
-            .setMtu(1400)
-            .setConfigureIntent(PendingIntent.getActivity(this, 0, 
-                Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE))
-    
+            .addDnsServer(dns)
+
         vpnInterface = try {
-            val iface = builder.establish()
-            android.util.Log.i("CB_VPN", "✅ VPN Interface CREATED")
-            iface
+            builder.establish()
         } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "❌ VPN Failed: ${e.message}")
             null
         }
-    
+
+        try {
+            val status = if (vpnInterface != null) " (DNS: $dns)" else " - Failed"
+            startForeground(NOTIF_ID, createNotification("Panda Monitor$status", connected = vpnInterface != null))
+        } catch (_: Exception) {}
+
         if (vpnInterface != null) {
             forwardingActive = true
-            updateNotification("VPN Active | Order Ready 🚀", true)
             startPacketForwarding()
-        } else {
-            updateNotification("VPN Setup Failed", false)
-        }
-    }
-    
-    private fun checkRoutingStatus() {
-        try {
-            val process = Runtime.getRuntime().exec("ip route show")
-            val reader = BufferedReader(InputStreamReader(process.inputStream))
-            var line: String?
-            var hasTun0Route = false
-            
-            while (reader.readLine().also { line = it } != null) {
-                android.util.Log.d("CB_VPN", "🔍 Route: $line")
-                if (line?.contains("tun0") == true) {
-                    hasTun0Route = true
-                    android.util.Log.i("CB_VPN", "🎯 FOUND tun0 in routing table!")
-                }
-            }
-            
-            if (!hasTun0Route) {
-                android.util.Log.w("CB_VPN", "⚠️ WARNING: No tun0 in routing table!")
-                updateNotification("VPN Limited - Routing Issue", false)
-            }
-            
-            reader.close()
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "❌ Routing check failed: ${e.message}")
-        }
-    }
-    
-    private fun updateNotification(text: String, connected: Boolean) {
-        try {
-            startForeground(NOTIF_ID, createNotification(text, connected))
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "Notification error: ${e.message}")
         }
     }
 
     private fun startPacketForwarding() {
         workerPool.execute {
-            android.util.Log.d("CB_VPN", "📤 Packet forwarding STARTED")
             val buffer = ByteArray(2048)
             while (forwardingActive) {
                 try {
@@ -188,47 +142,58 @@ class AppMonitorVPNService : VpnService() {
                     }
                 } catch (e: Exception) {
                     pandaActive = false
-                    Thread.sleep(50)
+                    Thread.sleep(50) // Reduced sleep for responsiveness
                 }
             }
-            android.util.Log.d("CB_VPN", "📤 Packet forwarding STOPPED")
         }
     }
 
+    // ✅ NEW: Process packets from priority queue
     private fun startPacketProcessor() {
         workerPool.execute {
-            android.util.Log.d("CB_VPN", "🔄 Packet processor STARTED")
             while (forwardingActive) {
                 try {
                     val task = priorityManager.takePacket() ?: continue
-                    processPacketTask(task)
+                    
+                    val destKey = "${task.destIp}:${task.destPort}"
+                    
+                    // Try to get existing socket from pool
+                    var socket = connectionPool.getSocket(task.destIp, task.destPort)
+                    
+                    if (socket == null || socket.isClosed || !socket.isConnected) {
+                        // Create new socket
+                        socket = try {
+                            Socket(task.destIp, task.destPort).apply {
+                                tcpNoDelay = true
+                                soTimeout = 15000 // Reduced timeout for faster failover
+                            }
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    
+                    if (socket != null) {
+                        // Track active connection
+                        tcpConnections[task.srcPort] = socket
+                        
+                        // Send data
+                        try {
+                            socket.getOutputStream().write(task.packet)
+                            socket.getOutputStream().flush()
+                            
+                            // Start response handler if not already
+                            if (!tcpConnections.containsKey(task.srcPort)) {
+                                startResponseHandler(task.srcPort, socket, task.destIp, task.destPort)
+                            }
+                        } catch (e: Exception) {
+                            socket.close()
+                            tcpConnections.remove(task.srcPort)
+                        }
+                    }
                 } catch (e: Exception) {
                     Thread.sleep(10)
                 }
             }
-        }
-    }
-
-    private fun processPacketTask(task: PacketTask) {
-        try {
-            val socket = Socket(task.destIp, task.destPort).apply {
-                tcpNoDelay = true
-                soTimeout = 10000
-            }
-            
-            android.util.Log.i("CB_VPN", "✅ Connected to ${task.destIp}:${task.destPort}")
-            
-            tcpConnections[task.srcPort] = socket
-            socket.getOutputStream().write(task.packet)
-            socket.getOutputStream().flush()
-            
-            android.util.Log.d("CB_VPN", "📤 Sent ${task.packet.size} bytes")
-            
-            startResponseHandler(task.srcPort, socket, task.destIp, task.destPort)
-            
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "❌ Connection failed: ${e.message}")
-            tcpConnections.remove(task.srcPort)
         }
     }
 
@@ -243,15 +208,19 @@ class AppMonitorVPNService : VpnService() {
                     val n = inStream.read(buffer)
                     if (n <= 0) break
                     
-                    android.util.Log.d("CB_VPN", "📥 Received $n bytes response")
                     val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buffer.copyOfRange(0, n))
                     outStream.write(reply)
                     outStream.flush()
                 }
             } catch (e: Exception) {
-                // Connection closed normally
+                // Socket closed or error
             } finally {
-                socket.close()
+                // Return socket to pool if still usable
+                if (socket.isConnected && !socket.isClosed) {
+                    connectionPool.returnSocket(destIp, destPort, socket)
+                } else {
+                    socket.close()
+                }
                 tcpConnections.remove(srcPort)
             }
         }
@@ -260,136 +229,53 @@ class AppMonitorVPNService : VpnService() {
     private fun handleOutboundPacket(packet: ByteArray) {
         try {
             val ipHeaderLen = (packet[0].toInt() and 0x0F) * 4
-            if (ipHeaderLen < 20 || packet.size < ipHeaderLen + 8) {
-                android.util.Log.w("CB_VPN", "⚠️ Packet too small")
-                return
-            }
-            
+            if (ipHeaderLen < 20 || packet.size < ipHeaderLen + 20) return
             val protocol = packet[9].toInt() and 0xFF
-            val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}." +
-                        "${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
-            val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or 
-                         (packet[ipHeaderLen + 1].toInt() and 0xFF)
-            val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or 
-                          (packet[ipHeaderLen + 3].toInt() and 0xFF)
+            if (protocol != 6) return // TCP only
+
+            val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+            val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 1].toInt() and 0xFF)
+            val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 3].toInt() and 0xFF)
+            val payload = packet.copyOfRange(ipHeaderLen + 20, packet.size)
+
+            // ✅ Add to priority queue instead of immediate processing
+            priorityManager.addPacket(payload, destIp, destPort, srcPort)
             
-            android.util.Log.i("CB_VPN", "🌐 Packet: $protocol to $destIp:$destPort")
-            
-            when (protocol) {
-                6 -> { // TCP
-                    if (packet.size < ipHeaderLen + 20) return
-                    val payload = packet.copyOfRange(ipHeaderLen + 20, packet.size)
-                    priorityManager.addPacket(payload, destIp, destPort, srcPort)
-                    android.util.Log.d("CB_VPN", "🔗 TCP queued (${payload.size} bytes)")
-                }
-                17 -> { // UDP
-                    // CRITICAL FIX: Handle DNS (port 53)
-                    if (destPort == 53) {
-                        android.util.Log.i("CB_VPN", "🔍 DNS Request detected")
-                        // Simple DNS forward to Google
-                        forwardDnsQuery(packet, srcPort)
-                    } else {
-                        android.util.Log.d("CB_VPN", "📨 UDP to $destIp:$destPort")
-                        // Untuk UDP lain (QUIC), skip dulu - focus pada TCP untuk order flow
-                    }
-                }
-                else -> {
-                    android.util.Log.d("CB_VPN", "📦 Other protocol: $protocol")
-                }
-            }
-            
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "❌ Packet error: ${e.message}")
-        }
-    }
-    
-    private fun forwardDnsQuery(dnsPacket: ByteArray, srcPort: Int) {
-        workerPool.execute {
-            try {
-                val googleDns = InetAddress.getByName("8.8.8.8")
-                val socket = java.net.DatagramSocket()
-                socket.soTimeout = 3000
-                
-                // Send to Google DNS
-                val packet = java.net.DatagramPacket(dnsPacket, dnsPacket.size, googleDns, 53)
-                socket.send(packet)
-                
-                // Receive response
-                val buffer = ByteArray(512)
-                val response = java.net.DatagramPacket(buffer, buffer.size)
-                socket.receive(response)
-                
-                // Forward response back to app
-                forwardDnsResponse(response.data.take(response.length).toByteArray(), srcPort)
-                
-                socket.close()
-                android.util.Log.i("CB_VPN", "✅ DNS forwarded successfully")
-                
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "❌ DNS forward failed: ${e.message}")
-            }
-        }
-    }
-    
-    private fun forwardDnsResponse(dnsResponse: ByteArray, srcPort: Int) {
-        // Simple response forwarding - minimal implementation
-        try {
-            val outStream = FileOutputStream(vpnInterface!!.fileDescriptor)
-            // Create simple UDP response packet
-            // Note: This is minimal - proper implementation would parse/build full UDP packet
-            outStream.write(dnsResponse)
-            android.util.Log.d("CB_VPN", "📤 DNS response forwarded")
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "❌ DNS response failed: ${e.message}")
-        }
+        } catch (_: Exception) {}
     }
 
-    private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, 
-                               destPort: Int, payload: ByteArray): ByteArray {
+    private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
+        // (Keep existing implementation, Tuan)
         val totalLen = 40 + payload.size
         val packet = ByteArray(totalLen)
-        
-        // Simple IP header
         packet[0] = 0x45
         packet[2] = (totalLen ushr 8).toByte()
         packet[3] = (totalLen and 0xFF).toByte()
         packet[8] = 0xFF.toByte()
         packet[9] = 0x06
-        
-        // Source IP
         val src = srcIp.split(".")
         packet[12] = src[0].toUByte().toByte()
         packet[13] = src[1].toUByte().toByte()
         packet[14] = src[2].toUByte().toByte()
         packet[15] = src[3].toUByte().toByte()
-        
-        // Dest IP
         val dest = destIp.split(".")
         packet[16] = dest[0].toUByte().toByte()
         packet[17] = dest[1].toUByte().toByte()
         packet[18] = dest[2].toUByte().toByte()
         packet[19] = dest[3].toUByte().toByte()
-        
-        // Ports
         packet[20] = (srcPort ushr 8).toByte()
         packet[21] = (srcPort and 0xFF).toByte()
         packet[22] = (destPort ushr 8).toByte()
         packet[23] = (destPort and 0xFF).toByte()
-        
-        // TCP header
         packet[32] = 0x50
         packet[33] = if (payload.isEmpty()) 0x02 else 0x18.toByte()
         packet[34] = 0xFF.toByte()
         packet[35] = 0xFF.toByte()
-        
-        // Payload
         System.arraycopy(payload, 0, packet, 40, payload.size)
-        
         return packet
     }
 
     override fun onDestroy() {
-        android.util.Log.d("CB_VPN", "🛑 SERVICE DESTROYING")
         forwardingActive = false
         connectionPool.closeAll()
         tcpConnections.values.forEach { it.close() }
