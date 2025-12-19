@@ -17,6 +17,8 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.io.BufferedReader
+import java.io.InputStreamReader
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -110,18 +112,27 @@ class AppMonitorVPNService : VpnService() {
         val builder = Builder()
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
-            // ✅ USE SPLIT ROUTES (bypass Android bug)
-            .addRoute("0.0.0.0", 1)      // 0.0.0.0 - 127.255.255.255
-            .addRoute("128.0.0.0", 1)    // 128.0.0.0 - 255.255.255.255
+            // ✅ USE SPLIT ROUTES ONLY (remove /0)
+            .addRoute("0.0.0.0", 1)
+            .addRoute("128.0.0.0", 1)
             .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
             .addDnsServer("1.1.1.1")
-            .setMtu(1400)                // Lower MTU (stability)
-            .setBlocking(false)          // Allow fallback
+            .setMtu(1400)  // ✅ Lower for stability
+            .setConfigureIntent(PendingIntent.getActivity(this, 0, 
+                Intent(this, MainActivity::class.java), 
+                PendingIntent.FLAG_IMMUTABLE))
     
         vpnInterface = try {
             val iface = builder.establish()
             android.util.Log.i("CB_VPN", "✅ VPN Interface CREATED")
+            
+            // Check routing after 2 seconds
+            Thread {
+                Thread.sleep(2000)
+                checkRoutingStatus()
+            }.start()
+            
             iface
         } catch (e: Exception) {
             android.util.Log.e("CB_VPN", "❌ VPN Failed: ${e.message}")
