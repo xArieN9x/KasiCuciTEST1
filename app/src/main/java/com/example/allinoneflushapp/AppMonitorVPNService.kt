@@ -39,7 +39,7 @@ class AppMonitorVPNService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
-        // ✅ Panggil startForeground() SEGERA (wajib dalam 5 saat)
+        // ✅ PANGGIL startForeground() SEGERA (wajib dalam 5 saat)
         startForeground(NOTIF_ID, createNotification("Panda Monitor initializing...", connected = false))
         establishVPN("8.8.8.8")
         return START_STICKY
@@ -90,13 +90,13 @@ class AppMonitorVPNService : VpnService() {
             null
         }
 
-        // ✅ Update notification status — TAPI JANGAN PANGGIL startForeground() LAGI!
+        // ✅ Update notification SAHAJA (jangan startForeground lagi)
         try {
             val connected = vpnInterface != null
             val notif = createNotification("Panda Monitor (DNS: $dns)", connected = connected)
             val nm = getSystemService(NotificationManager::class.java)
             nm.notify(NOTIF_ID, notif)
-            
+
             if (connected) {
                 forwardingActive = true
                 startPacketForwarding()
@@ -114,7 +114,7 @@ class AppMonitorVPNService : VpnService() {
                     val fd = vpnInterface?.fileDescriptor ?: break
                     val len = FileInputStream(fd).read(buffer)
                     if (len > 0) {
-                        pandaActive = true
+                        pandaActive = true // ✅ Jadi true bila ada outbound
                         handleOutboundPacket(buffer.copyOfRange(0, len))
                     }
                 } catch (e: Exception) {
@@ -124,6 +124,9 @@ class AppMonitorVPNService : VpnService() {
             }
         }
     }
+
+    // ... (biarkan handleOutboundPacket & buildTcpPacket sama seperti dalam BACKUP_ORIGIANL_AppMonitorVPNService.kt.txt)
+    // (tak perlu ubah langsung)
 
     private fun handleOutboundPacket(packet: ByteArray) {
         try {
@@ -182,10 +185,17 @@ class AppMonitorVPNService : VpnService() {
         val totalLen = 40 + payload.size
         val packet = ByteArray(totalLen)
         packet[0] = 0x45
+        packet[1] = 0x00
         packet[2] = (totalLen ushr 8).toByte()
         packet[3] = (totalLen and 0xFF).toByte()
+        packet[4] = 0x00
+        packet[5] = 0x00
+        packet[6] = 0x00
+        packet[7] = 0x00
         packet[8] = 0xFF.toByte()
         packet[9] = 0x06
+        packet[10] = 0x00
+        packet[11] = 0x00
         val src = srcIp.split(".")
         packet[12] = src[0].toUByte().toByte()
         packet[13] = src[1].toUByte().toByte()
@@ -200,10 +210,11 @@ class AppMonitorVPNService : VpnService() {
         packet[21] = (srcPort and 0xFF).toByte()
         packet[22] = (destPort ushr 8).toByte()
         packet[23] = (destPort and 0xFF).toByte()
-        packet[32] = 0x50
-        packet[33] = 0x10
-        packet[34] = 0x01
+        packet[32] = 0x01
+        packet[33] = 0x00
+        packet[34] = 0x00
         packet[35] = 0x00
+        packet[36] = 0x00
         System.arraycopy(payload, 0, packet, 40, payload.size)
         return packet
     }
