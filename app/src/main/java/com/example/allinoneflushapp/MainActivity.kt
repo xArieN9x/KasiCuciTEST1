@@ -20,28 +20,30 @@ import java.net.URL
 import kotlin.system.exitProcess
 
 class MainActivity : AppCompatActivity() {
+
     private lateinit var textViewIP: TextView
     private lateinit var textViewDNS: TextView
     private lateinit var networkIndicator: ImageView
     private lateinit var btnDoAllJob: Button
     private lateinit var btnAccessibilityOn: Button
     private lateinit var btnForceCloseAll: Button
+
     private val pandaPackage = "com.logistics.rider.foodpanda"
-    private val dnsList = listOf("1.1.1.1", "156.154.70.1", "8.8.8.8", "76.76.2.0")
+    private val dnsList = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "9.9.9.10")
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            actuallyStartVpnService()
-        } else {
-            Toast.makeText(this, "VPN permission required", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Setting up VPN...", Toast.LENGTH_SHORT).show()
+            startService(Intent(this, AppMonitorVPNService::class.java))
+            AppMonitorVPNService.rotateDNS(dnsList)
         }
     }
 
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
-    ) {
+    ) { 
         if (Settings.canDrawOverlays(this)) {
             startFloatingWidget()
         } else {
@@ -53,15 +55,18 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         AppGlobals.applicationContext = application
         setContentView(R.layout.activity_main)
+
         textViewIP = findViewById(R.id.textViewIP)
         textViewDNS = findViewById(R.id.textViewDNS)
         networkIndicator = findViewById(R.id.networkIndicator)
         btnDoAllJob = findViewById(R.id.btnDoAllJob)
         btnAccessibilityOn = findViewById(R.id.btnAccessibilityOn)
         btnForceCloseAll = findViewById(R.id.btnForceCloseAll)
+
         updateIP()
         rotateDNS()
         startNetworkMonitor()
+
         btnDoAllJob.setOnClickListener { doAllJobSequence() }
         btnAccessibilityOn.setOnClickListener { openAccessibilitySettings() }
         btnForceCloseAll.setOnClickListener { forceCloseAllAndExit() }
@@ -69,29 +74,16 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // Check if Panda is running, if yes show floating widget
         if (isPandaRunning() && !FloatingWidgetService.isRunning()) {
             checkAndStartFloatingWidget()
-        }
-    }
-
-    private fun actuallyStartVpnService() {
-        stopService(Intent(this, AppMonitorVPNService::class.java))
-        startService(Intent(this, AppMonitorVPNService::class.java))
-        AppMonitorVPNService.rotateDNS(dnsList)
-    }
-
-    private fun requestVpnPermission() {
-        val intent = VpnService.prepare(this)
-        if (intent != null) {
-            vpnPermissionLauncher.launch(intent)
-        } else {
-            actuallyStartVpnService()
         }
     }
 
     private fun checkAndStartFloatingWidget() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
+                // Request overlay permission
                 val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
                 overlayPermissionLauncher.launch(intent)
             } else {
@@ -106,6 +98,8 @@ class MainActivity : AppCompatActivity() {
         if (!FloatingWidgetService.isRunning()) {
             val intent = Intent(this, FloatingWidgetService::class.java)
             startService(intent)
+            
+            // Minimize to background after 1 second
             Handler(Looper.getMainLooper()).postDelayed({
                 moveTaskToBack(true)
             }, 1000)
@@ -123,7 +117,12 @@ class MainActivity : AppCompatActivity() {
             val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
             startActivity(intent)
-            Toast.makeText(this, "Enable 'CB Accessibility Engine'", Toast.LENGTH_LONG).show()
+            
+            Toast.makeText(
+                this, 
+                "Enable 'CB Accessibility Engine'", 
+                Toast.LENGTH_LONG
+            ).show()
         } catch (e: Exception) {
             Toast.makeText(this, "Cannot open settings", Toast.LENGTH_SHORT).show()
         }
@@ -131,34 +130,38 @@ class MainActivity : AppCompatActivity() {
 
     private fun forceCloseAllAndExit() {
         Toast.makeText(this, "Closing all...", Toast.LENGTH_SHORT).show()
+        
+        // Stop floating widget if running
         if (FloatingWidgetService.isRunning()) {
             stopService(Intent(this, FloatingWidgetService::class.java))
         }
-        val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-        am.killBackgroundProcesses(pandaPackage)
+        
+        // Force close Panda
+        AccessibilityAutomationService.requestForceStopOnly(pandaPackage)
+        
+        // Wait then close CB
         Handler(Looper.getMainLooper()).postDelayed({
             finishAffinity()
             exitProcess(0)
-        }, 1500)
+        }, 2000)
+    }
+
+    private fun requestVpnPermission() {
+        val intent = VpnService.prepare(this)
+        if (intent != null) {
+            vpnPermissionLauncher.launch(intent)
+        } else {
+            Toast.makeText(this, "Setting up VPN...", Toast.LENGTH_SHORT).show()
+            startService(Intent(this, AppMonitorVPNService::class.java))
+            AppMonitorVPNService.rotateDNS(dnsList)
+        }
     }
 
     private fun updateIP() {
         CoroutineScope(Dispatchers.IO).launch {
-            var ip: String? = null
-            try {
-                val url = URL("https://1.1.1.1/cdn-cgi/trace")
-                val text = url.readText().trim()
-                // Format: ip=123.123.123.123
-                val ipLine = text.lines().find { it.startsWith("ip=") }
-                ip = ipLine?.substringAfter("=")?.trim()
-            } catch (e1: Exception) {
-                // Fallback to ipify jika 1.1.1.1 gagal
-                try {
-                    ip = URL("https://api.ipify.org").readText().trim()
-                } catch (e2: Exception) {
-                    ip = null
-                }
-            }
+            val ip = try {
+                URL("https://api.ipify.org").readText().trim()
+            } catch (e: Exception) { null }
             withContext(Dispatchers.Main) {
                 textViewIP.text = if (ip.isNullOrEmpty()) "Public IP: —" else "Public IP: $ip"
             }
@@ -186,26 +189,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun doAllJobSequence() {
+        // 1. Force stop Panda + clear cache
         AccessibilityAutomationService.requestClearAndForceStop(pandaPackage)
+
         CoroutineScope(Dispatchers.Main).launch {
+            // Wait for force stop + clear cache complete
             delay(7000)
+            
+            // 2. Toggle airplane
             AccessibilityAutomationService.requestToggleAirplane()
-            // ✅ Tunda lebih lama untuk network stabil
-            delay(9000) // dari 5500 → 9000
+            
+            // Wait airplane cycle
+            delay(5500)
+            
+            // Bring CB to foreground
             bringAppToForeground()
-            delay(1000)
-    
-            // ✅ FETCH IP DULU (dengan logik asal, tiada 'break')
-            updateIP()
-    
-            delay(1500)
+            delay(500)
+            
+            // 3. Setup VPN
             Toast.makeText(this@MainActivity, "Setting up VPN tunnel...", Toast.LENGTH_SHORT).show()
             requestVpnPermission()
-            delay(2100)
-    
+            
+            // Wait VPN establish
+            delay(2000)
+            
+            // 4. Rotate DNS & refresh IP
             rotateDNS()
+            delay(500)
+            updateIP()
+            
+            // 5. Launch Panda app
+            delay(1000)
             launchPandaApp()
-            delay(1500)
+            
+            // 6. Start floating widget after Panda opens
+            delay(2000)
             checkAndStartFloatingWidget()
         }
     }
