@@ -94,23 +94,28 @@ class AppMonitorVPNService : VpnService() {
     }
 
     fun establishVPN(dns: String) {
+        android.util.Log.i("CB_VPN_TRACE", "🚀 [VPN_SETUP] START - DNS: $dns")
+        
         try {
             forwardingActive = false
             tcpConnections.values.forEach { it.socket.close() }
             tcpConnections.clear()
             vpnInterface?.close()
         } catch (_: Exception) {}
-
+    
         val builder = Builder()
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
             .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
-
+    
         vpnInterface = try {
-            builder.establish()
+            val iface = builder.establish()
+            android.util.Log.i("CB_VPN_TRACE", "✅ [VPN_SETUP] SUCCESS - Interface: $iface")
+            iface
         } catch (e: Exception) {
+            android.util.Log.e("CB_VPN_TRACE", "❌ [VPN_SETUP] FAILED: ${e.message}")
             null
         }
 
@@ -167,15 +172,24 @@ class AppMonitorVPNService : VpnService() {
 
     private fun handleOutboundPacket(packet: ByteArray) {
         try {
+            // ✅ DEBUG: Log semua packet masuk
+            android.util.Log.d("CB_VPN_TRACE", "📥 [PACKET_IN] Size: ${packet.size} bytes")
+            
             val ipHeaderLen = (packet[0].toInt() and 0x0F) * 4
             if (ipHeaderLen < 20 || packet.size < ipHeaderLen + 20) return
             val protocol = packet[9].toInt() and 0xFF
+            
+            // ✅ DEBUG: Protocol type
+            android.util.Log.d("CB_VPN_TRACE", "📊 [PROTOCOL] Type: $protocol (6=TCP, 17=UDP)")
+            
             if (protocol != 6) return // Hanya TCP
-
+    
             val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
             val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 1].toInt() and 0xFF)
             val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 3].toInt() and 0xFF)
-            val payload = packet.copyOfRange(ipHeaderLen + 20, packet.size)
+            
+            // ✅ DEBUG: TCP connection details
+            android.util.Log.i("CB_VPN_TRACE", "🎯 [TCP_DETECTED] $destIp:$destPort (from port $srcPort)")
 
             // ✅ ENHANCEMENT #3: Limit max connections
             if (!tcpConnections.containsKey(srcPort) && tcpConnections.size >= MAX_CONNECTIONS) {
@@ -192,7 +206,10 @@ class AppMonitorVPNService : VpnService() {
             if (!tcpConnections.containsKey(srcPort)) {
                 workerPool.execute {
                     try {
+                        android.util.Log.i("CB_VPN_TRACE", "🔗 [CONN_OUT] Creating socket to $destIp:$destPort")
                         val socket = Socket(destIp, destPort)
+                        android.util.Log.i("CB_VPN_TRACE", "✅ [CONN_OUT] Socket created successfully")
+                        
                         socket.tcpNoDelay = true
                         socket.soTimeout = 30000 // 30 second timeout
                         
@@ -233,6 +250,7 @@ class AppMonitorVPNService : VpnService() {
                             socket.getOutputStream().flush()
                         }
                     } catch (_: Exception) {
+                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_OUT] Failed: ${e.message}")
                         tcpConnections.remove(srcPort)
                     }
                 }
@@ -246,6 +264,7 @@ class AppMonitorVPNService : VpnService() {
                             it.flush()
                         }
                     } catch (_: Exception) {
+                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_OUT] Failed: ${e.message}")
                         tcpConnections.remove(srcPort)
                     }
                 }
@@ -254,6 +273,9 @@ class AppMonitorVPNService : VpnService() {
     }
 
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
+    // ✅ DEBUG: Packet building
+    android.util.Log.d("CB_VPN_TRACE", "🔨 [BUILD_REPLY] $destIp:$destPort -> $srcIp:$srcPort (${payload.size} bytes)")
+    
         val totalLen = 40 + payload.size
         val packet = ByteArray(totalLen)
         packet[0] = 0x45
@@ -280,6 +302,8 @@ class AppMonitorVPNService : VpnService() {
         packet[34] = 0xFF.toByte()
         packet[35] = 0xFF.toByte()
         System.arraycopy(payload, 0, packet, 40, payload.size)
+
+        android.util.Log.d("CB_VPN_TRACE", "📤 [REPLY_SENT] ${totalLen} bytes")
         return packet
     }
 
