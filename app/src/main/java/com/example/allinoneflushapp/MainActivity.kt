@@ -120,7 +120,7 @@ class MainActivity : AppCompatActivity() {
             
             Toast.makeText(
                 this, 
-                "Enable 'CB Accessibility Engine'", 
+                "Enable 'CBP Accessibility Engine'", 
                 Toast.LENGTH_LONG
             ).show()
         } catch (e: Exception) {
@@ -159,9 +159,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateIP() {
         CoroutineScope(Dispatchers.IO).launch {
-            val ip = try {
-                URL("https://api.ipify.org").readText().trim()
-            } catch (e: Exception) { null }
+            var ip: String? = null
+            try {
+                val url = URL("https://1.1.1.1/cdn-cgi/trace")
+                val text = url.readText().trim()
+                // Format: ip=123.123.123.123
+                val ipLine = text.lines().find { it.startsWith("ip=") }
+                ip = ipLine?.substringAfter("=")?.trim()
+            } catch (e1: Exception) {
+                // Fallback to ipify jika 1.1.1.1 gagal
+                try {
+                    ip = URL("https://api.ipify.org").readText().trim()
+                } catch (e2: Exception) {
+                    ip = null
+                }
+            }
             withContext(Dispatchers.Main) {
                 textViewIP.text = if (ip.isNullOrEmpty()) "Public IP: —" else "Public IP: $ip"
             }
