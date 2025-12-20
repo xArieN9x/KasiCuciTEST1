@@ -107,7 +107,7 @@ class AppMonitorVPNService : VpnService() {
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
-            .addAllowedApplication("com.logistics.rider.foodpanda")
+            //.addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
     
         vpnInterface = try {
