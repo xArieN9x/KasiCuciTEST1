@@ -317,7 +317,6 @@ class AppMonitorVPNService : VpnService() {
             android.util.Log.e("CB_VPN_TRACE", "💥 [HANDLE_PACKET] Outer error: ${outerEx.message}")
         }
     }
-    }
 
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
     // ✅ DEBUG: Packet building
