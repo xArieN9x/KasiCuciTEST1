@@ -35,7 +35,7 @@
     <application
         android:allowBackup="true"
         android:theme="@style/Theme.AppCompat.Light"
-        android:usesCleartextTraffic="false"
+        android:usesCleartextTraffic="true"
         android:supportsRtl="true">
 
         <!-- Main UI -->
