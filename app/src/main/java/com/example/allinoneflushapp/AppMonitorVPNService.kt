@@ -179,8 +179,8 @@ class AppMonitorVPNService : VpnService() {
                             try {
                                 android.util.Log.d("CB_VPN_TRACE", "🔌 [CLEANUP] Closing port $port (${info.destIp}:${info.destPort})")
                                 info.socket.close()
-                            } catch (e: Exception) {
-                                android.util.Log.e("CB_VPN_TRACE", "❌ [CLEANUP] Error closing port $port: ${e.message}")
+                            } catch (closeException: Exception) {
+                                android.util.Log.e("CB_VPN_TRACE", "❌ [CLEANUP] Error closing port $port: ${closeException.message}")
                             }
                             tcpConnections.remove(port)
                             android.util.Log.d("CB_VPN_TRACE", "✅ [CLEANUP] Port $port removed")
@@ -189,8 +189,8 @@ class AppMonitorVPNService : VpnService() {
                         android.util.Log.i("CB_VPN_TRACE", "📊 [CLEANUP] Remaining connections: ${tcpConnections.size}")
                     }
                     
-                } catch (e: Exception) {
-                    android.util.Log.e("CB_VPN_TRACE", "💥 [CLEANUP] Thread error: ${e.message}")
+                } catch (threadException: Exception) {
+                    android.util.Log.e("CB_VPN_TRACE", "💥 [CLEANUP] Thread error: ${threadException.message}")
                 }
             }
             
