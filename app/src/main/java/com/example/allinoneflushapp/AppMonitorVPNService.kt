@@ -18,22 +18,13 @@ import java.util.concurrent.Executors
 class AppMonitorVPNService : VpnService() {
     companion object {
         private var pandaActive = false
-        private var lastPacketTime = 0L
-        private var dnsIndex = 0
         private var instance: AppMonitorVPNService? = null
 
-        fun isPandaActive(): Boolean {
-            val now = System.currentTimeMillis()
-            if (now - lastPacketTime > 3000) {
-                pandaActive = false
-            }
-            return pandaActive
-        }
+        fun isPandaActive() = pandaActive
 
         fun rotateDNS(dnsList: List<String>) {
             if (instance == null) return
-            dnsIndex = (dnsIndex + 1) % dnsList.size
-            val nextDNS = dnsList[dnsIndex]
+            val nextDNS = dnsList.random()
             instance?.establishVPN(nextDNS)
         }
     }
@@ -48,7 +39,8 @@ class AppMonitorVPNService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, createNotification("Panda Monitor running", connected = false))
+        // ✅ Panggil startForeground() SEGERA (wajib dalam 5 saat)
+        startForeground(NOTIF_ID, createNotification("Panda Monitor initializing...", connected = false))
         establishVPN("8.8.8.8")
         return START_STICKY
     }
@@ -89,7 +81,7 @@ class AppMonitorVPNService : VpnService() {
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
-            .addAllowedApplication("com.logistics.rider.foodpanda") // ✅ Biarkan, selamat
+            .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
 
         vpnInterface = try {
@@ -98,14 +90,20 @@ class AppMonitorVPNService : VpnService() {
             null
         }
 
+        // ✅ Update notification status — TAPI JANGAN PANGGIL startForeground() LAGI!
         try {
-            startForeground(NOTIF_ID, createNotification("Panda Monitor (DNS: $dns)", connected = vpnInterface != null))
+            val connected = vpnInterface != null
+            val notif = createNotification("Panda Monitor (DNS: $dns)", connected = connected)
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.notify(NOTIF_ID, notif)
+            
+            if (connected) {
+                forwardingActive = true
+                startPacketForwarding()
+            } else {
+                pandaActive = false
+            }
         } catch (_: Exception) {}
-
-        if (vpnInterface != null) {
-            forwardingActive = true
-            startPacketForwarding()
-        }
     }
 
     private fun startPacketForwarding() {
@@ -116,9 +114,7 @@ class AppMonitorVPNService : VpnService() {
                     val fd = vpnInterface?.fileDescriptor ?: break
                     val len = FileInputStream(fd).read(buffer)
                     if (len > 0) {
-                        // ✅ UPDATE DI SINI — SEBELUM FILTER
                         pandaActive = true
-                        lastPacketTime = System.currentTimeMillis()
                         handleOutboundPacket(buffer.copyOfRange(0, len))
                     }
                 } catch (e: Exception) {
@@ -221,7 +217,6 @@ class AppMonitorVPNService : VpnService() {
             vpnInterface?.close()
         } catch (_: Exception) {}
         pandaActive = false
-        lastPacketTime = 0L
         instance = null
         super.onDestroy()
     }
