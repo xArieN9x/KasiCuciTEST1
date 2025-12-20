@@ -96,6 +96,15 @@ class AppMonitorVPNService : VpnService() {
     fun establishVPN(dns: String) {
         android.util.Log.i("CB_VPN_TRACE", "🚀 [VPN_SETUP] START - DNS: $dns")
         
+        // ✅ CHECK PERMISSION FIRST!
+        val prepareIntent = VpnService.prepare(this)
+        if (prepareIntent != null) {
+            android.util.Log.w("CB_VPN_TRACE", "⚠️ VPN needs permission!")
+            // Need show permission dialog
+            // Cannot continue here!
+            return
+        }
+        
         try {
             forwardingActive = false
             tcpConnections.values.forEach { it.socket.close() }
@@ -107,7 +116,7 @@ class AppMonitorVPNService : VpnService() {
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
-            //.addAllowedApplication("com.logistics.rider.foodpanda")
+            // .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
     
         vpnInterface = try {
@@ -118,11 +127,11 @@ class AppMonitorVPNService : VpnService() {
             android.util.Log.e("CB_VPN_TRACE", "❌ [VPN_SETUP] FAILED: ${e.message}")
             null
         }
-
+    
         try {
             startForeground(NOTIF_ID, createNotification("Panda Monitor (DNS: $dns)", connected = vpnInterface != null))
         } catch (_: Exception) {}
-
+    
         if (vpnInterface != null) {
             forwardingActive = true
             startPacketForwarding()
