@@ -215,10 +215,11 @@ class AppMonitorVPNService : VpnService() {
             val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
             val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 1].toInt() and 0xFF)
             val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 3].toInt() and 0xFF)
+            val payload = packet.copyOfRange(ipHeaderLen + 20, packet.size)  // ✅ DECLARE DI SINI
             
             // ✅ DEBUG: TCP connection details
-            android.util.Log.i("CB_VPN_TRACE", "🎯 [TCP_DETECTED] $destIp:$destPort (from port $srcPort)")
-
+            android.util.Log.i("CB_VPN_TRACE", "🎯 [TCP_DETECTED] $destIp:$destPort (from port $srcPort), payload: ${payload.size} bytes")
+    
             // ✅ ENHANCEMENT #3: Limit max connections
             if (!tcpConnections.containsKey(srcPort) && tcpConnections.size >= MAX_CONNECTIONS) {
                 // Remove oldest connection
@@ -226,16 +227,24 @@ class AppMonitorVPNService : VpnService() {
                 oldest?.let {
                     try {
                         it.value.socket.close()
-                    } catch (_: Exception) {}
+                    } catch (closeEx: Exception) {
+                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_LIMIT] Error closing old socket: ${closeEx.message}")
+                    }
                     tcpConnections.remove(it.key)
                 }
             }
-
+    
             if (!tcpConnections.containsKey(srcPort)) {
+                // ✅ CAPTURE variables untuk lambda
+                val capturedDestIp = destIp
+                val capturedDestPort = destPort
+                val capturedSrcPort = srcPort
+                val capturedPayload = payload
+                
                 workerPool.execute {
                     try {
-                        android.util.Log.i("CB_VPN_TRACE", "🔗 [CONN_OUT] Creating socket to $destIp:$destPort")
-                        val socket = Socket(destIp, destPort)
+                        android.util.Log.i("CB_VPN_TRACE", "🔗 [CONN_OUT] Creating socket to $capturedDestIp:$capturedDestPort")
+                        val socket = Socket(capturedDestIp, capturedDestPort)
                         android.util.Log.i("CB_VPN_TRACE", "✅ [CONN_OUT] Socket created successfully")
                         
                         socket.tcpNoDelay = true
@@ -245,11 +254,18 @@ class AppMonitorVPNService : VpnService() {
                         val info = SocketInfo(
                             socket = socket,
                             lastUsed = System.currentTimeMillis(),
-                            destIp = destIp,
-                            destPort = destPort
+                            destIp = capturedDestIp,
+                            destPort = capturedDestPort
                         )
-                        tcpConnections[srcPort] = info
-
+                        tcpConnections[capturedSrcPort] = info
+    
+                        // Write initial payload jika ada
+                        if (capturedPayload.isNotEmpty()) {
+                            socket.getOutputStream().write(capturedPayload)
+                            socket.getOutputStream().flush()
+                            android.util.Log.d("CB_VPN_TRACE", "📤 [PAYLOAD_SENT] ${capturedPayload.size} bytes")
+                        }
+    
                         workerPool.execute {
                             val outStream = FileOutputStream(vpnInterface!!.fileDescriptor)
                             val inStream = socket.getInputStream()
@@ -260,26 +276,25 @@ class AppMonitorVPNService : VpnService() {
                                     if (n <= 0) break
                                     
                                     // ✅ Update last used time
-                                    tcpConnections[srcPort]?.let {
-                                        tcpConnections[srcPort] = it.copy(lastUsed = System.currentTimeMillis())
+                                    tcpConnections[capturedSrcPort]?.let {
+                                        tcpConnections[capturedSrcPort] = it.copy(lastUsed = System.currentTimeMillis())
                                     }
                                     
-                                    val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
+                                    val reply = buildTcpPacket(capturedDestIp, capturedDestPort, "10.0.0.2", capturedSrcPort, buf.copyOfRange(0, n))
                                     outStream.write(reply)
                                     outStream.flush()
+                                    android.util.Log.d("CB_VPN_TRACE", "📥 [REPLY_RECEIVED] $n bytes from server")
                                 }
-                            } catch (_: Exception) {}
-                            tcpConnections.remove(srcPort)
+                            } catch (readEx: Exception) {
+                                android.util.Log.e("CB_VPN_TRACE", "❌ [REPLY_ERROR] ${readEx.message}")
+                            }
+                            tcpConnections.remove(capturedSrcPort)
                             socket.close()
+                            android.util.Log.i("CB_VPN_TRACE", "🔌 [CONN_CLOSED] Port $capturedSrcPort")
                         }
-
-                        if (payload.isNotEmpty()) {
-                            socket.getOutputStream().write(payload)
-                            socket.getOutputStream().flush()
-                        }
-                    } catch (_: Exception) {
-                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_OUT] Failed: ${e.message}")
-                        tcpConnections.remove(srcPort)
+                    } catch (socketEx: Exception) {
+                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_OUT] Failed: ${socketEx.message}")
+                        tcpConnections.remove(capturedSrcPort)
                     }
                 }
             } else {
@@ -290,14 +305,18 @@ class AppMonitorVPNService : VpnService() {
                         info.socket.getOutputStream()?.let {
                             it.write(payload)
                             it.flush()
+                            android.util.Log.d("CB_VPN_TRACE", "🔄 [REUSE] Sent ${payload.size} bytes via existing connection")
                         }
-                    } catch (_: Exception) {
-                        android.util.Log.e("CB_VPN_TRACE", "❌ [CONN_OUT] Failed: ${e.message}")
+                    } catch (writeEx: Exception) {
+                        android.util.Log.e("CB_VPN_TRACE", "❌ [REUSE_FAILED] ${writeEx.message}")
                         tcpConnections.remove(srcPort)
                     }
                 }
             }
-        } catch (_: Exception) {}
+        } catch (outerEx: Exception) {
+            android.util.Log.e("CB_VPN_TRACE", "💥 [HANDLE_PACKET] Outer error: ${outerEx.message}")
+        }
+    }
     }
 
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
