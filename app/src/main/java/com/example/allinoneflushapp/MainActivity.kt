@@ -29,7 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnForceCloseAll: Button
 
     private val pandaPackage = "com.logistics.rider.foodpanda"
-    private val dnsList = listOf("1.1.1.1", "8.8.8.8", "9.9.9.9", "9.9.9.10")
+    private val dnsList = listOf("1.1.1.1", "156.154.70.1", "8.8.8.8", "76.76.2.0")
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
