@@ -152,21 +152,49 @@ class AppMonitorVPNService : VpnService() {
     // ✅ ENHANCEMENT #1: Connection cleanup thread
     private fun startConnectionCleanup() {
         workerPool.execute {
+            android.util.Log.i("CB_VPN_TRACE", "🧹 [CLEANUP] Thread started")
+            
             while (forwardingActive) {
                 try {
                     Thread.sleep(10000) // Check every 10 seconds
+                    
+                    val totalConnections = tcpConnections.size
+                    android.util.Log.d("CB_VPN_TRACE", "🔍 [CLEANUP] Checking $totalConnections connections")
+                    
                     val now = System.currentTimeMillis()
-                    val staleConnections = tcpConnections.filter { (_, info) ->
-                        now - info.lastUsed > 60000 // 60 seconds idle
+                    val staleConnections = tcpConnections.filter { (port, info) ->
+                        val idleTime = now - info.lastUsed
+                        val isStale = idleTime > 60000 // 60 seconds idle
+                        
+                        if (isStale) {
+                            android.util.Log.d("CB_VPN_TRACE", "⏰ [CLEANUP] Port $port idle for ${idleTime/1000}s (${info.destIp}:${info.destPort})")
+                        }
+                        isStale
                     }
-                    staleConnections.forEach { (port, info) ->
-                        try {
-                            info.socket.close()
-                        } catch (_: Exception) {}
-                        tcpConnections.remove(port)
+                    
+                    if (staleConnections.isNotEmpty()) {
+                        android.util.Log.i("CB_VPN_TRACE", "🗑️ [CLEANUP] Removing ${staleConnections.size} stale connections")
+                        
+                        staleConnections.forEach { (port, info) ->
+                            try {
+                                android.util.Log.d("CB_VPN_TRACE", "🔌 [CLEANUP] Closing port $port (${info.destIp}:${info.destPort})")
+                                info.socket.close()
+                            } catch (e: Exception) {
+                                android.util.Log.e("CB_VPN_TRACE", "❌ [CLEANUP] Error closing port $port: ${e.message}")
+                            }
+                            tcpConnections.remove(port)
+                            android.util.Log.d("CB_VPN_TRACE", "✅ [CLEANUP] Port $port removed")
+                        }
+                        
+                        android.util.Log.i("CB_VPN_TRACE", "📊 [CLEANUP] Remaining connections: ${tcpConnections.size}")
                     }
-                } catch (_: Exception) {}
+                    
+                } catch (e: Exception) {
+                    android.util.Log.e("CB_VPN_TRACE", "💥 [CLEANUP] Thread error: ${e.message}")
+                }
             }
+            
+            android.util.Log.i("CB_VPN_TRACE", "🧹 [CLEANUP] Thread stopped")
         }
     }
 
