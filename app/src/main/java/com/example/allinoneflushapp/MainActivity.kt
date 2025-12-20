@@ -103,6 +103,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun checkAndStartFloatingWidget() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!Settings.canDrawOverlays(this)) {
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+                overlayPermissionLauncher.launch(intent)
+            } else {
+                startFloatingWidget()
+            }
+        } else {
+            startFloatingWidget()
+        }
+    }
+
     private fun isPandaRunning(): Boolean {
         val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         val runningApps = activityManager.runningAppProcesses ?: return false
