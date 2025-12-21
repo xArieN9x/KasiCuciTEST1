@@ -75,32 +75,29 @@ class AppMonitorVPNService : VpnService() {
             tcpConnections.clear()
             vpnInterface?.close()
         } catch (_: Exception) {}
-
+    
         val builder = Builder()
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
             .addAllowedApplication("com.logistics.rider.foodpanda")
             .addDnsServer(dns)
-
+    
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
             null
         }
-
-        // ✅ Update notification SAHAJA (jangan startForeground lagi)
-        try {
-            val connected = vpnInterface != null
-            val text = if (connected) "Panda Monitor (DNS: $dns)" else "Panda Monitor failed"
-            val notif = createNotification(text, connected)
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.notify(NOTIF_ID, notif) // ✅ guna notify(), bukan startForeground()
     
-            if (connected) {
+        // ✅ UPDATE NOTIFICATION SAHAJA
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            if (vpnInterface != null) {
+                nm.notify(NOTIF_ID, createNotification("Panda Monitor (DNS: $dns)", connected = true))
                 forwardingActive = true
                 startPacketForwarding()
             } else {
+                nm.notify(NOTIF_ID, createNotification("Panda Monitor failed", connected = false))
                 pandaActive = false
             }
         } catch (_: Exception) {}
