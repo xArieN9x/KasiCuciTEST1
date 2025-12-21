@@ -39,9 +39,7 @@ class AppMonitorVPNService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
-        // ✅ INI WAJIB: Panggil SEGERA
         startForeground(NOTIF_ID, createNotification("Panda Monitor initializing...", connected = false))
-        // Baru setup VPN
         establishVPN("8.8.8.8")
         return START_STICKY
     }
@@ -49,8 +47,8 @@ class AppMonitorVPNService : VpnService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
-            nm.notify(NOTIF_ID, createNotification("Panda Monitor (DNS: $dns)", connected = vpnInterface != null))
-            nm?.createNotificationChannel(channel)
+            val chan = NotificationChannel(CHANNEL_ID, "Panda Monitor", NotificationManager.IMPORTANCE_LOW)
+            nm?.createNotificationChannel(chan)
         }
     }
 
@@ -94,10 +92,11 @@ class AppMonitorVPNService : VpnService() {
         // ✅ Update notification SAHAJA (jangan startForeground lagi)
         try {
             val connected = vpnInterface != null
-            val notif = createNotification("Panda Monitor (DNS: $dns)", connected = connected)
+            val text = if (connected) "Panda Monitor (DNS: $dns)" else "Panda Monitor failed"
+            val notif = createNotification(text, connected)
             val nm = getSystemService(NotificationManager::class.java)
-            nm.notify(NOTIF_ID, notif)
-
+            nm.notify(NOTIF_ID, notif) // ✅ guna notify(), bukan startForeground()
+    
             if (connected) {
                 forwardingActive = true
                 startPacketForwarding()
