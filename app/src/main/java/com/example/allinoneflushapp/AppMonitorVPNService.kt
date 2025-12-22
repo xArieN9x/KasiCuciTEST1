@@ -148,7 +148,8 @@ class AppMonitorVPNService : VpnService() {
                         tcpConnections[srcPort] = socket
     
                         workerPool.execute {
-                            val outStream = FileOutputStream(vpnInterface!!.fileDescriptor)
+                            val fd = vpnInterface?.fileDescriptor ?: return@execute
+                            val outStream = FileOutputStream(fd)
                             val inStream = socket.getInputStream()
                             val buf = ByteArray(2048)
                             try {
