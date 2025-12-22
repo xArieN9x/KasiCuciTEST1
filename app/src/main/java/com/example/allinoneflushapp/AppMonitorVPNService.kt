@@ -10,16 +10,20 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
-import java.net.ServerSocket
+import java.io.FileOutputStream
+import java.net.DatagramSocket
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
 
 class AppMonitorVPNService : VpnService() {
     companion object {
         private var pandaActive = false
         private var instance: AppMonitorVPNService? = null
+        private const val PANDA_PACKAGE = "com.logistics.rider.foodpanda"
 
         fun isPandaActive() = pandaActive
         fun rotateDNS(dnsList: List<String>) {
-            // Disabled
+            // Reserved untuk future use
         }
     }
 
@@ -28,26 +32,35 @@ class AppMonitorVPNService : VpnService() {
     private val CHANNEL_ID = "panda_monitor_channel"
     private val NOTIF_ID = 1001
     
+    // ✅ PROTECTED SOCKET untuk bypass circular routing
+    private var protectedSocket: DatagramSocket? = null
+    
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, createNotification("CB Monitor Active", connected = true))
+        startForeground(NOTIF_ID, createNotification("CB Monitor Starting...", connected = false))
     
-        // ✅ FINAL FIX: VPN untuk monitor SAHAJA, semua apps bypass
+        // ✅ VPN CONFIG - Monitor Panda dengan proper forwarding
         val builder = Builder()
-        builder.setSession("CB Monitor")
-            .setMtu(1500)
-            .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 1)      // Split route 1
-            .addRoute("128.0.0.0", 1)    // Split route 2
+        builder.setSession("CB Panda Monitor")
+            .setMtu(1400)  // Optimized untuk Realme C3
+            .addAddress("10.8.0.1", 24)  // Local VPN address
+            
+            // ✅ CRITICAL: Route hanya Panda traffic
+            .addRoute("0.0.0.0", 1)      
+            .addRoute("128.0.0.0", 1)    
+            
             .addDnsServer("8.8.8.8")
             .addDnsServer("1.1.1.1")
             
-            // ✅ EXCLUDE SEMUA APPS - biar terus ke internet
-            .addDisallowedApplication(packageName)  // Self
+            // ✅ EXCLUDE apps EXCEPT Panda untuk testing
+            .addDisallowedApplication(packageName)  // Exclude self
         
-        // ✅ Exclude common apps untuk pastikan internet berfungsi
+        // ✅ Exclude common apps untuk stability
         excludeCommonApps(builder)
+        
+        // ✅ REMOVE Panda dari exclude - biar masuk VPN
+        // TIDAK ada addDisallowedApplication untuk Panda!
         
         // ✅ Realme workarounds
         applyRealmeWorkaround(builder)
@@ -55,25 +68,47 @@ class AppMonitorVPNService : VpnService() {
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
-            null
+            android.util.Log.e("CB_VPN", "VPN establish failed: ${e.message}")
+            stopSelf()
+            return START_NOT_STICKY
         }
     
         if (vpnInterface != null) {
             forwardingActive = true
             
-            // ✅ PANDA AKTIF SERTA-MERTA (tanpa perlu traffic)
-            pandaActive = true
+            // ✅ Setup protected socket untuk bypass
+            setupProtectedSocket()
             
-            // ✅ START LOCAL SERVER untuk trigger panda consistency
-            startLocalTriggerServer()
+            // ✅ START packet forwarding (CRITICAL FIX)
+            startPacketForwarder()
             
-            // ✅ MONITOR TRAFFIC (optional)
-            startTrafficMonitor()
+            // ✅ Update notification
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.notify(NOTIF_ID, createNotification("CB Monitor Active", connected = true))
+            
+            android.util.Log.d("CB_VPN", "VPN successfully started - monitoring Panda")
         } else {
+            android.util.Log.e("CB_VPN", "VPN interface null - stopping")
             stopSelf()
         }
     
         return START_STICKY
+    }
+    
+    // ✅ SETUP PROTECTED SOCKET - bypass circular routing
+    private fun setupProtectedSocket() {
+        Thread {
+            try {
+                protectedSocket = DatagramSocket()
+                // ✅ CRITICAL: Protect socket dari VPN sendiri
+                protect(protectedSocket!!)
+                // Connect ke DNS untuk test
+                protectedSocket?.connect(InetSocketAddress("8.8.8.8", 53))
+                android.util.Log.d("CB_VPN", "Protected socket created successfully")
+            } catch (e: Exception) {
+                android.util.Log.e("CB_VPN", "Protected socket failed: ${e.message}")
+            }
+        }.start()
     }
     
     private fun excludeCommonApps(builder: Builder) {
@@ -99,65 +134,102 @@ class AppMonitorVPNService : VpnService() {
             try {
                 builder.addDisallowedApplication(app)
             } catch (e: Exception) {
-                // App mungkin tak installed
+                // App not installed
             }
         }
         
-        // ✅ TAMBAH BARIS INI SAHAJA
-        // Exclude Panda juga supaya dia dapat internet biasa
-        try {
-            builder.addDisallowedApplication("com.logistics.rider.foodpanda")
-        } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "Cannot exclude Panda: ${e.message}")
-        }
+        // ✅ PENTING: JANGAN exclude Panda!
+        // Panda MESTI masuk VPN untuk monitoring
+        android.util.Log.d("CB_VPN", "Panda INCLUDED in VPN for monitoring")
     }
 
     private fun applyRealmeWorkaround(builder: Builder) {
         try {
-            // Set blocking
+            // Non-blocking mode untuk Realme
             val setBlocking = builder.javaClass.getMethod("setBlocking", Boolean::class.java)
-            setBlocking.invoke(builder, true)
-        } catch (e: Exception) {}
+            setBlocking.invoke(builder, false)
+            android.util.Log.d("CB_VPN", "Realme: Non-blocking mode set")
+        } catch (e: Exception) {
+            android.util.Log.w("CB_VPN", "Realme blocking workaround failed")
+        }
         
         try {
-            // Android 10+ allow bypass
+            // Allow bypass untuk stability
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val setAllowBypass = builder.javaClass.getMethod("setAllowBypass", Boolean::class.java)
                 setAllowBypass.invoke(builder, true)
+                android.util.Log.d("CB_VPN", "Realme: Bypass allowed")
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            android.util.Log.w("CB_VPN", "Realme bypass workaround failed")
+        }
     }
     
-    // ✅ LOCAL SERVER untuk trigger panda consistency
-    private fun startLocalTriggerServer() {
+    // ✅ PACKET FORWARDER - THE CRITICAL FIX!
+    private fun startPacketForwarder() {
         Thread {
+            val buffer = ByteBuffer.allocate(32767)  // Max IP packet size
+            var lastActivityTime = System.currentTimeMillis()
+            
             try {
-                val server = ServerSocket(29293) // Random port
-                android.util.Log.d("CB_VPN", "Local trigger server started on port 29293")
+                val fd = vpnInterface?.fileDescriptor ?: return@Thread
+                val input = FileInputStream(fd)
+                val output = FileOutputStream(fd)
+                
+                android.util.Log.d("CB_VPN", "Packet forwarder STARTED")
                 
                 while (forwardingActive) {
-                    val client = server.accept()
-                    client.getInputStream().read()
-                    client.close()
+                    buffer.clear()
                     
-                    // Refresh panda active
-                    pandaActive = true
-                    android.util.Log.d("CB_VPN", "Panda trigger refreshed")
+                    // ✅ READ packet dari VPN interface
+                    val length = input.read(buffer.array())
+                    
+                    if (length > 0) {
+                        buffer.limit(length)
+                        
+                        // ✅ DETECT Panda activity
+                        pandaActive = true
+                        lastActivityTime = System.currentTimeMillis()
+                        
+                        // ✅ FORWARD packet keluar (INTERNET ACCESS!)
+                        output.write(buffer.array(), 0, length)
+                        
+                        // Log basic packet info
+                        if (length >= 20) {
+                            val protocol = buffer.get(9).toInt() and 0xFF
+                            val protocolName = when(protocol) {
+                                6 -> "TCP"
+                                17 -> "UDP"
+                                1 -> "ICMP"
+                                else -> "OTHER"
+                            }
+                            android.util.Log.d("CB_VPN", 
+                                "✅ Forwarded ${length}b [$protocolName] for Panda")
+                        }
+                    }
+                    
+                    // ✅ Auto-reset pandaActive after 5 seconds no traffic
+                    if (System.currentTimeMillis() - lastActivityTime > 5000) {
+                        if (pandaActive) {
+                            android.util.Log.d("CB_VPN", "Panda idle - resetting active flag")
+                            pandaActive = false
+                        }
+                    }
                 }
-                server.close()
             } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "Local server error: ${e.message}")
+                android.util.Log.e("CB_VPN", "Forwarder error: ${e.message}")
+                forwardingActive = false
             }
+            
+            android.util.Log.d("CB_VPN", "Packet forwarder STOPPED")
         }.start()
         
-        // ✅ SEND SELF-TRIGGER setiap 30 saat
+        // ✅ HEARTBEAT thread untuk consistency
         Thread {
             while (forwardingActive) {
                 try {
-                    Thread.sleep(30000)
-                    // Self-trigger
-                    pandaActive = true
-                    android.util.Log.d("CB_VPN", "Panda auto-refresh")
+                    Thread.sleep(30000)  // 30 seconds
+                    android.util.Log.d("CB_VPN", "VPN heartbeat - Active: $pandaActive")
                 } catch (e: Exception) {
                     break
                 }
@@ -165,33 +237,14 @@ class AppMonitorVPNService : VpnService() {
         }.start()
     }
 
-    private fun startTrafficMonitor() {
-        Thread {
-            val buffer = ByteArray(2048)
-            
-            try {
-                val fd = vpnInterface?.fileDescriptor ?: return@Thread
-                val input = FileInputStream(fd)
-                
-                android.util.Log.d("CB_VPN", "Traffic monitor started")
-                
-                while (forwardingActive) {
-                    val len = input.read(buffer)
-                    if (len > 0) {
-                        // Traffic detected - refresh panda
-                        pandaActive = true
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "Monitor error: ${e.message}")
-            }
-        }.start()
-    }
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
-            val channel = NotificationChannel(CHANNEL_ID, "CB Monitor", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(
+                CHANNEL_ID, 
+                "CB Panda Monitor", 
+                NotificationManager.IMPORTANCE_LOW
+            )
             nm?.createNotificationChannel(channel)
         }
     }
@@ -200,13 +253,19 @@ class AppMonitorVPNService : VpnService() {
         val pi = PendingIntent.getActivity(
             this, 0,
             Intent(this, MainActivity::class.java),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) 
+                PendingIntent.FLAG_IMMUTABLE else 0
         )
-        val smallIcon = if (connected) android.R.drawable.presence_online else android.R.drawable.presence_busy
+        
+        val icon = if (connected) 
+            android.R.drawable.presence_online 
+        else 
+            android.R.drawable.presence_busy
+            
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("CB Monitor")
+            .setContentTitle("CB Panda Monitor")
             .setContentText(text)
-            .setSmallIcon(smallIcon)
+            .setSmallIcon(icon)
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
@@ -214,12 +273,18 @@ class AppMonitorVPNService : VpnService() {
 
     private fun cleanup() {
         forwardingActive = false
+        
+        protectedSocket?.close()
+        protectedSocket = null
+        
         vpnInterface?.close()
         vpnInterface = null
+        
         pandaActive = false
         instance = null
+        
         stopForeground(true)
-        stopSelf()
+        android.util.Log.d("CB_VPN", "VPN cleaned up")
     }
 
     override fun onDestroy() {
