@@ -128,8 +128,60 @@ class AppMonitorVPNService : VpnService() {
             val protocol = packet[9].toInt() and 0xFF
             if (protocol != 6) return // Hanya TCP
     
-            // ✅ BIARKAN PANDA HANTAR, TAPI JANGAN FORWARD BALIK
-            // Ini ujian: adakah outbound sahaja cukup untuk internet?
+            val destIp = "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}.${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+            val srcPort = ((packet[ipHeaderLen].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 1].toInt() and 0xFF)
+            val destPort = ((packet[ipHeaderLen + 2].toInt() and 0xFF) shl 8) or (packet[ipHeaderLen + 3].toInt() and 0xFF)
+    
+            val payloadStart = ipHeaderLen + 20
+            val payload = if (packet.size > payloadStart) {
+                packet.copyOfRange(payloadStart, packet.size)
+            } else {
+                byteArrayOf()
+            }
+    
+            // ✅ Khusus untuk DNS (port 53) — forward penuh
+            if (destPort == 53 || srcPort == 53) {
+                if (!tcpConnections.containsKey(srcPort)) {
+                    workerPool.execute {
+                        val fd = vpnInterface?.fileDescriptor ?: return@execute
+                        try {
+                            val socket = Socket(destIp, destPort)
+                            socket.soTimeout = 5000
+                            tcpConnections[srcPort] = socket
+    
+                            workerPool.execute {
+                                val outStream = FileOutputStream(fd)
+                                val inStream = socket.getInputStream()
+                                val buf = ByteArray(2048)
+                                try {
+                                    while (forwardingActive && socket.isConnected && !socket.isClosed) {
+                                        val n = inStream.read(buf)
+                                        if (n <= 0) break
+                                        val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
+                                        outStream.write(reply)
+                                        outStream.flush()
+                                    }
+                                } catch (_: Exception) {}
+                                tcpConnections.remove(srcPort)
+                                socket.close()
+                            }
+    
+                            if (payload.isNotEmpty()) {
+                                socket.getOutputStream().write(payload)
+                                socket.getOutputStream().flush()
+                            }
+                        } catch (_: Exception) {
+                            tcpConnections.remove(srcPort)
+                        }
+                    }
+                } else {
+                    tcpConnections[srcPort]?.getOutputStream()?.let {
+                        it.write(payload)
+                        it.flush()
+                    }
+                }
+            }
+    
             pandaActive = true
         } catch (_: Exception) {}
     }
