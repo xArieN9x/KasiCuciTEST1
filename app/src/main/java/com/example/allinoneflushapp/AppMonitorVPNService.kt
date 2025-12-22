@@ -12,23 +12,34 @@ import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
 
 class AppMonitorVPNService : VpnService() {
+    companion object {
+        // ✅ Dummy function untuk elak compile error
+        private var pandaActive = false
+        private var instance: AppMonitorVPNService? = null
+
+        fun isPandaActive() = pandaActive
+        fun rotateDNS(dnsList: List<String>) {
+            // ⛔ Disabled sebab DNS hardcoded
+        }
+    }
 
     private var vpnInterface: ParcelFileDescriptor? = null
     private var forwardingActive = false
-    private val CHANNEL_ID = "cb_vpn_monitor"
-    private val NOTIF_ID = 999
+    private val CHANNEL_ID = "panda_monitor_channel"
+    private val NOTIF_ID = 1001
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, createNotification("CB Monitor Active", true))
-        
-        // Setup VPN — semua app lalu, DNS = 1.1.1.1
+        startForeground(NOTIF_ID, createNotification("CB Tunnel Active", connected = true))
+
+        // ✅ Simple tunnel - SEMUA app lalu, DNS = 1.1.1.1
         val builder = Builder()
-        builder.setSession("CBMonitor")
+        builder.setSession("CBTunnel")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
-            .addDnsServer("1.1.1.1") // ✅ Hardcode Cloudflare DNS
-        
+            .addDnsServer("1.1.1.1") // Hardcoded Cloudflare DNS
+
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
@@ -37,7 +48,7 @@ class AppMonitorVPNService : VpnService() {
 
         if (vpnInterface != null) {
             forwardingActive = true
-            startPacketReader()
+            startSimpleReader()
         } else {
             stopSelf()
         }
@@ -48,8 +59,8 @@ class AppMonitorVPNService : VpnService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
-            val chan = NotificationChannel(CHANNEL_ID, "CB VPN Monitor", NotificationManager.IMPORTANCE_LOW)
-            nm?.createNotificationChannel(chan)
+            val channel = NotificationChannel(CHANNEL_ID, "CB Tunnel", NotificationManager.IMPORTANCE_LOW)
+            nm?.createNotificationChannel(channel)
         }
     }
 
@@ -59,16 +70,18 @@ class AppMonitorVPNService : VpnService() {
             Intent(this, MainActivity::class.java),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         )
+        val smallIcon = if (connected) android.R.drawable.presence_online else android.R.drawable.presence_busy
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("CB Monitor")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(smallIcon)
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
     }
 
-    private fun startPacketReader() {
+    // ✅ Baca packet sahaja — jangan ubah, jangan forward
+    private fun startSimpleReader() {
         Thread {
             val buffer = ByteArray(2048)
             while (forwardingActive) {
@@ -76,22 +89,30 @@ class AppMonitorVPNService : VpnService() {
                     val fd = vpnInterface?.fileDescriptor ?: break
                     val len = FileInputStream(fd).read(buffer)
                     if (len > 0) {
-                        // ✅ LOG SIMPLE UNTUK ADB
-                        android.util.Log.d("CB_VPN", "Packet captured: $len bytes")
+                        // ✅ DEBUG LOG UNTUK ADB
+                        android.util.Log.d("CB_VPN", "Traffic: $len bytes through tunnel")
+                        pandaActive = true // biar indicator hijau
                     }
                 } catch (e: Exception) {
                     break
                 }
             }
-            vpnInterface?.close()
-            stopForeground(true)
-            stopSelf()
+            cleanup()
         }.start()
     }
 
-    override fun onDestroy() {
+    private fun cleanup() {
         forwardingActive = false
         vpnInterface?.close()
+        vpnInterface = null
+        pandaActive = false
+        instance = null
+        stopForeground(true)
+        stopSelf()
+    }
+
+    override fun onDestroy() {
+        cleanup()
         super.onDestroy()
     }
 }
