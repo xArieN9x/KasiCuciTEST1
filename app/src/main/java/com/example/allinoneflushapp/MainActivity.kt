@@ -29,13 +29,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnForceCloseAll: Button
 
     private val pandaPackage = "com.logistics.rider.foodpanda"
-    private val dnsList = listOf("1.1.1.1", "8.8.8.8", "8.8.4.4")
+    private val dnsList = listOf("1.1.1.1", "156.154.70.1", "8.8.8.8")
 
     private val vpnPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
-            startVpnService()
+            // ✅ Start service DI SINI sahaja
+            actuallyStartVpnService()
         }
     }
 
@@ -61,6 +62,7 @@ class MainActivity : AppCompatActivity() {
         btnAccessibilityOn = findViewById(R.id.btnAccessibilityOn)
         btnForceCloseAll = findViewById(R.id.btnForceCloseAll)
 
+        // ✅ Jangan updateIP di sini — nanti blank
         rotateDNS()
         startNetworkMonitor()
 
@@ -69,22 +71,43 @@ class MainActivity : AppCompatActivity() {
         btnForceCloseAll.setOnClickListener { forceCloseAllAndExit() }
     }
 
-    private fun startVpnService() {
+    private fun actuallyStartVpnService() {
         val intent = Intent(this, AppMonitorVPNService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
             startService(intent)
         }
-        Toast.makeText(this, "VPN service starting...", Toast.LENGTH_SHORT).show()
+        // ✅ TRIGGER PANDA SELF-CHECK
+        triggerPandaSelfCheck()
     }
 
+    // ✅ FUNCTION BARU: Trigger panda dari UI
+    private fun triggerPandaSelfCheck() {
+        Thread {
+            try {
+                // Connect to own local server (port dari AppMonitorVPNService)
+                java.net.Socket("127.0.0.1", 29293).use {
+                    it.getOutputStream().write(1)
+                }
+                android.util.Log.d("PANDA", "Self-trigger sent")
+            } catch (e: Exception) {
+                // Server mungkin belum start - ini OK
+            }
+        }.start()
+    }
+
+    // ✅ FUNCTION BARU: Check panda status
+    fun isPandaGreen(): Boolean {
+        return AppMonitorVPNService.isPandaActive()
+    }
+    
     private fun requestVpnPermission() {
         val intent = VpnService.prepare(this)
         if (intent != null) {
             vpnPermissionLauncher.launch(intent)
         } else {
-            startVpnService()
+            actuallyStartVpnService()
         }
     }
 
@@ -98,11 +121,7 @@ class MainActivity : AppCompatActivity() {
     private fun startFloatingWidget() {
         if (!FloatingWidgetService.isRunning()) {
             val intent = Intent(this, FloatingWidgetService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(intent)
-            } else {
-                startService(intent)
-            }
+            startService(intent)
             Handler(Looper.getMainLooper()).postDelayed({
                 moveTaskToBack(true)
             }, 1000)
@@ -112,8 +131,7 @@ class MainActivity : AppCompatActivity() {
     private fun checkAndStartFloatingWidget() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (!Settings.canDrawOverlays(this)) {
-                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, 
-                    Uri.parse("package:$packageName"))
+                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
                 overlayPermissionLauncher.launch(intent)
             } else {
                 startFloatingWidget()
@@ -142,16 +160,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun forceCloseAllAndExit() {
         Toast.makeText(this, "Closing all...", Toast.LENGTH_SHORT).show()
-        
         if (FloatingWidgetService.isRunning()) {
             stopService(Intent(this, FloatingWidgetService::class.java))
         }
         
+        // Stop VPN service juga
         stopService(Intent(this, AppMonitorVPNService::class.java))
         
         val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
         am.killBackgroundProcesses(pandaPackage)
-        
         Handler(Looper.getMainLooper()).postDelayed({
             finishAffinity()
             exitProcess(0)
@@ -162,20 +179,19 @@ class MainActivity : AppCompatActivity() {
         CoroutineScope(Dispatchers.IO).launch {
             var ip: String? = null
             try {
-                ip = URL("https://api.ipify.org").readText().trim()
-            } catch (e: Exception) {
+                val url = URL("https://1.1.1.1/cdn-cgi/trace")
+                val text = url.readText().trim()
+                val ipLine = text.lines().find { it.startsWith("ip=") }
+                ip = ipLine?.substringAfter("=")?.trim()
+            } catch (e1: Exception) {
                 try {
-                    val url = URL("https://1.1.1.1/cdn-cgi/trace")
-                    val text = url.readText().trim()
-                    val ipLine = text.lines().find { it.startsWith("ip=") }
-                    ip = ipLine?.substringAfter("=")?.trim()
+                    ip = URL("https://api.ipify.org").readText().trim()
                 } catch (e2: Exception) {
                     ip = null
                 }
             }
-            
             withContext(Dispatchers.Main) {
-                textViewIP.text = if (ip.isNullOrEmpty()) "IP: —" else "IP: $ip"
+                textViewIP.text = if (ip.isNullOrEmpty()) "Public IP: —" else "Public IP: $ip"
             }
         }
     }
@@ -183,6 +199,7 @@ class MainActivity : AppCompatActivity() {
     private fun rotateDNS() {
         val selectedDNS = dnsList.random()
         textViewDNS.text = "DNS: $selectedDNS"
+        AppMonitorVPNService.rotateDNS(dnsList = listOf(selectedDNS))
     }
 
     private fun startNetworkMonitor() {
@@ -200,29 +217,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun doAllJobSequence() {
-        // 1. Clear panda
         AccessibilityAutomationService.requestClearAndForceStop(pandaPackage)
-        
         CoroutineScope(Dispatchers.Main).launch {
-            delay(5000)
-            
-            // 2. Airplane toggle
+            delay(7000)
             AccessibilityAutomationService.requestToggleAirplane()
-            delay(8000)
-            
-            // 3. Update IP
+            // ✅ Tambah delay untuk network benar-benar stabil
+            delay(9000)
+
+            bringAppToForeground()
+            delay(1000)
+
+            // ✅ FETCH IP SELEPAS AIRPLANE OFF
             updateIP()
             delay(1000)
-            
-            // 4. Start VPN
+
+            Toast.makeText(this@MainActivity, "Setting up VPN tunnel...", Toast.LENGTH_SHORT).show()
             requestVpnPermission()
-            delay(4000) // Tunggu VPN stabil
-            
-            // 5. Launch panda
+            delay(2500)
+
+            // ✅ TRIGGER PANDA SELF-CHECK selepas VPN start
+            triggerPandaSelfCheck()
+
+            // ✅ Jangan rotateDNS lagi — dah cukup sekali
             launchPandaApp()
             delay(2000)
-            
-            // 6. Start widget
             checkAndStartFloatingWidget()
         }
     }
@@ -239,7 +257,7 @@ class MainActivity : AppCompatActivity() {
             if (intent != null) {
                 intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 startActivity(intent)
-                Toast.makeText(this, "Panda launched", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Panda launched!", Toast.LENGTH_SHORT).show()
             }
         } catch (e: Exception) {
             Toast.makeText(this, "Failed to launch Panda", Toast.LENGTH_SHORT).show()
