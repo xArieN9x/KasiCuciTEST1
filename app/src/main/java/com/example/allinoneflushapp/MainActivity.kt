@@ -72,34 +72,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun actuallyStartVpnService() {
+        stopService(Intent(this, AppMonitorVPNService::class.java))
         val intent = Intent(this, AppMonitorVPNService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
             startService(intent)
         }
-        // ✅ TRIGGER PANDA SELF-CHECK
-        triggerPandaSelfCheck()
-    }
-
-    // ✅ FUNCTION BARU: Trigger panda dari UI
-    private fun triggerPandaSelfCheck() {
-        Thread {
-            try {
-                // Connect to own local server (port dari AppMonitorVPNService)
-                java.net.Socket("127.0.0.1", 29293).use {
-                    it.getOutputStream().write(1)
-                }
-                android.util.Log.d("PANDA", "Self-trigger sent")
-            } catch (e: Exception) {
-                // Server mungkin belum start - ini OK
-            }
-        }.start()
-    }
-
-    // ✅ FUNCTION BARU: Check panda status
-    fun isPandaGreen(): Boolean {
-        return AppMonitorVPNService.isPandaActive()
+        // ⛔️ COMMENT BARIS INI:
+        // AppMonitorVPNService.rotateDNS(dnsList)
     }
 
     private fun requestVpnPermission() {
@@ -168,7 +149,7 @@ class MainActivity : AppCompatActivity() {
             stopService(Intent(this, FloatingWidgetService::class.java))
         }
         
-        // Stop VPN service juga
+        // ✅ TAMBAH: Stop VPN service juga
         stopService(Intent(this, AppMonitorVPNService::class.java))
         
         val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
@@ -203,7 +184,8 @@ class MainActivity : AppCompatActivity() {
     private fun rotateDNS() {
         val selectedDNS = dnsList.random()
         textViewDNS.text = "DNS: $selectedDNS"
-        // AppMonitorVPNService.rotateDNS(dnsList = listOf(selectedDNS)) // ⛔️ Comment - function disabled
+        // ⛔️ COMMENT BARIS INI:
+        // AppMonitorVPNService.rotateDNS(dnsList = listOf(selectedDNS))
     }
 
     private fun startNetworkMonitor() {
@@ -239,9 +221,7 @@ class MainActivity : AppCompatActivity() {
             requestVpnPermission()
             delay(2500)
 
-            // ✅ TRIGGER PANDA SELF-CHECK selepas VPN start
-            triggerPandaSelfCheck()
-            
+            // ✅ Jangan rotateDNS lagi — dah cukup sekali
             launchPandaApp()
             delay(2000)
             checkAndStartFloatingWidget()
