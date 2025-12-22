@@ -13,13 +13,12 @@ import java.io.FileInputStream
 
 class AppMonitorVPNService : VpnService() {
     companion object {
-        // ✅ Dummy function untuk elak compile error
         private var pandaActive = false
         private var instance: AppMonitorVPNService? = null
 
         fun isPandaActive() = pandaActive
         fun rotateDNS(dnsList: List<String>) {
-            // ⛔ Disabled sebab DNS hardcoded
+            // Disabled
         }
     }
 
@@ -33,22 +32,23 @@ class AppMonitorVPNService : VpnService() {
         createNotificationChannel()
         startForeground(NOTIF_ID, createNotification("CB Tunnel Active", connected = true))
     
-        // ✅ Konfigurasi identikal dengan PCAPdroid
+        // ✅ KONFIGURASI FIXED UNTUK REALME C3
         val builder = Builder()
         builder.setSession("CBTunnel")
-            .setMtu(10000)
+            .setMtu(1500)  // MTU standard
             .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 1)
-            .addRoute("128.0.0.0", 1)
+            .addRoute("0.0.0.0", 0)  // ✅ ROUTE DEFAULT SEMUA TRAFIK
             .addDnsServer("1.1.1.1")
+            .addDnsServer("8.8.8.8")  // DNS backup
+            .setAllowBypass(true)     // Allow apps bypass VPN jika perlu
     
+        // IPv6 (optional)
         try {
             builder.addAddress("fd00:2:fd00:1:fd00:1:fd00:2", 128)
-            builder.addRoute("2000::", 3)
-            builder.addRoute("fc00::", 7)
+            builder.addRoute("::", 0)  // Default route IPv6
             builder.addDnsServer("2606:4700:4700::1111")
         } catch (e: Exception) {
-            // Ignore IPv6 error
+            // Ignore jika device tak support IPv6
         }
     
         vpnInterface = try {
@@ -91,7 +91,6 @@ class AppMonitorVPNService : VpnService() {
             .build()
     }
 
-    // ✅ Baca packet sahaja — jangan ubah, jangan forward
     private fun startSimpleReader() {
         Thread {
             val buffer = ByteArray(2048)
@@ -100,9 +99,8 @@ class AppMonitorVPNService : VpnService() {
                     val fd = vpnInterface?.fileDescriptor ?: break
                     val len = FileInputStream(fd).read(buffer)
                     if (len > 0) {
-                        // ✅ DEBUG LOG UNTUK ADB
-                        android.util.Log.d("CB_VPN", "Traffic: $len bytes through tunnel")
-                        pandaActive = true // biar indicator hijau
+                        android.util.Log.d("CB_VPN", "Traffic: $len bytes")
+                        pandaActive = true
                     }
                 } catch (e: Exception) {
                     break
