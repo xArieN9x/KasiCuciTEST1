@@ -32,27 +32,38 @@ class AppMonitorVPNService : VpnService() {
         instance = this
         createNotificationChannel()
         startForeground(NOTIF_ID, createNotification("CB Tunnel Active", connected = true))
-
-        // ✅ Simple tunnel - SEMUA app lalu, DNS = 1.1.1.1
+    
+        // ✅ Konfigurasi identikal dengan PCAPdroid
         val builder = Builder()
         builder.setSession("CBTunnel")
-            .addAddress("10.0.0.2", 32)
-            .addRoute("0.0.0.0", 0)
-            .addDnsServer("1.1.1.1") // Hardcoded Cloudflare DNS
-
+            .setMtu(10000)
+            .addAddress("10.215.173.2", 30)
+            .addRoute("0.0.0.0", 1)
+            .addRoute("128.0.0.0", 1)
+            .addDnsServer("1.1.1.1")
+    
+        try {
+            builder.addAddress("fd00:2:fd00:1:fd00:1:fd00:2", 128)
+            builder.addRoute("2000::", 3)
+            builder.addRoute("fc00::", 7)
+            builder.addDnsServer("2606:4700:4700::1111")
+        } catch (e: Exception) {
+            // Ignore IPv6 error
+        }
+    
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
             null
         }
-
+    
         if (vpnInterface != null) {
             forwardingActive = true
             startSimpleReader()
         } else {
             stopSelf()
         }
-
+    
         return START_STICKY
     }
 
