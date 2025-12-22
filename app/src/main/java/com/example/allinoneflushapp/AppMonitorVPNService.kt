@@ -75,7 +75,7 @@ class AppMonitorVPNService : VpnService() {
     
         return START_STICKY
     }
-
+    
     private fun excludeCommonApps(builder: Builder) {
         val appsToExclude = arrayOf(
             "com.android.chrome",
@@ -101,6 +101,14 @@ class AppMonitorVPNService : VpnService() {
             } catch (e: Exception) {
                 // App mungkin tak installed
             }
+        }
+        
+        // ✅ TAMBAH BARIS INI SAHAJA
+        // Exclude Panda juga supaya dia dapat internet biasa
+        try {
+            builder.addDisallowedApplication("com.logistics.rider.foodpanda")
+        } catch (e: Exception) {
+            android.util.Log.e("CB_VPN", "Cannot exclude Panda: ${e.message}")
         }
     }
 
