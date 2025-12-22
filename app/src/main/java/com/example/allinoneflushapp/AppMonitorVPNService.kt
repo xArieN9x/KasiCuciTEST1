@@ -38,7 +38,9 @@ class AppMonitorVPNService : VpnService() {
         builder.setSession("CBTunnel")
             .setMtu(1500)
             .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 0)  // ✅ SEMUA TRAFIK KE TUN0
+            .addRoute("0.0.0.0", 0)      // ✅ DEFAULT ROUTE SEMUA TRAFIK
+            .addRoute("0.0.0.0", 1)      // ✅ COVER 0.0.0.0 - 127.255.255.255
+            .addRoute("128.0.0.0", 1)    // ✅ COVER 128.0.0.0 - 255.255.255.255
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
             .addDnsServer("208.67.222.222")  // OpenDNS backup
@@ -46,7 +48,7 @@ class AppMonitorVPNService : VpnService() {
         // IPv6 (optional)
         try {
             builder.addAddress("fd00:2:fd00:1:fd00:1:fd00:2", 128)
-            builder.addRoute("::", 0)
+            builder.addRoute("::", 0)    // ✅ DEFAULT ROUTE IPv6
             builder.addDnsServer("2606:4700:4700::1111")
         } catch (e: Exception) {
             // Skip jika tak support
@@ -60,13 +62,55 @@ class AppMonitorVPNService : VpnService() {
     
         if (vpnInterface != null) {
             forwardingActive = true
-            // ⬇️ GANTI INI
+            
+            // ✅ TAMBAH MANUAL DEFAULT ROUTE VIA ip COMMAND
+            addManualDefaultRoute()
+            
             startPacketForwarder()
         } else {
             stopSelf()
         }
     
         return START_STICKY
+    }
+
+    // ✅ FUNCTION TAMBAHAN: ADD MANUAL DEFAULT ROUTE
+    private fun addManualDefaultRoute() {
+        Thread {
+            try {
+                // Tunggu 1 saat untuk interface stabil
+                Thread.sleep(1000)
+                
+                // Guna ip command untuk tambah default route
+                val commands = arrayOf(
+                    arrayOf("ip", "route", "add", "default", "dev", "tun1"),
+                    arrayOf("ip", "-6", "route", "add", "default", "dev", "tun1")
+                )
+                
+                for (cmd in commands) {
+                    try {
+                        val process = ProcessBuilder(*cmd).start()
+                        val exitCode = process.waitFor()
+                        if (exitCode == 0) {
+                            android.util.Log.d("CB_VPN", "Success: ${cmd.joinToString(" ")}")
+                        } else {
+                            android.util.Log.w("CB_VPN", "Failed (${exitCode}): ${cmd.joinToString(" ")}")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("CB_VPN", "Command error: ${e.message}")
+                    }
+                }
+                
+                // Log current routes untuk debug
+                val routeProcess = ProcessBuilder("ip", "route", "show", "dev", "tun1").start()
+                val input = routeProcess.inputStream.bufferedReader()
+                val routes = input.readText()
+                android.util.Log.d("CB_VPN", "Current tun1 routes:\n$routes")
+                
+            } catch (e: Exception) {
+                android.util.Log.e("CB_VPN", "addManualDefaultRoute error: ${e.message}")
+            }
+        }.start()
     }
 
     private fun createNotificationChannel() {
@@ -113,7 +157,7 @@ class AppMonitorVPNService : VpnService() {
         }.start()
     }
 
-    // ⬇️ TAMBAH FUNCTION BARU INI UNTUK FORWARD PACKET
+    // ⬇️ PACKET FORWARDER UTAMA
     private fun startPacketForwarder() {
         Thread {
             val buffer = ByteArray(32767) // Buffer lebih besar
