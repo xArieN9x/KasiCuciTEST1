@@ -26,33 +26,29 @@ class AppMonitorVPNService : VpnService() {
     private var forwardingActive = false
     private val CHANNEL_ID = "panda_monitor_channel"
     private val NOTIF_ID = 1001
-
+    
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
         startForeground(NOTIF_ID, createNotification("CB Tunnel Active", connected = true))
     
-        // ✅ KONFIGURASI FIXED UNTUK REALME C3
+        // ✅ FIXED CONFIG - REALME C3 COMPATIBLE
         val builder = Builder()
         builder.setSession("CBTunnel")
             .setMtu(1500)
             .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 0)
+            .addRoute("0.0.0.0", 0)  // ✅ SEMUA TRAFIK KE TUN0
             .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
-
-        // Allow bypass hanya untuk API 29+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setAllowBypass(true)
-        }
+            .addDnsServer("208.67.222.222")  // OpenDNS backup
     
         // IPv6 (optional)
         try {
             builder.addAddress("fd00:2:fd00:1:fd00:1:fd00:2", 128)
-            builder.addRoute("::", 0)  // Default route IPv6
+            builder.addRoute("::", 0)
             builder.addDnsServer("2606:4700:4700::1111")
         } catch (e: Exception) {
-            // Ignore jika device tak support IPv6
+            // Skip jika tak support
         }
     
         vpnInterface = try {
