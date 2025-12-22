@@ -80,8 +80,7 @@ class AppMonitorVPNService : VpnService() {
         builder.setSession("PandaMonitor")
             .addAddress("10.0.0.2", 32)
             .addRoute("0.0.0.0", 0)
-            .addDisallowedApplication(packageName) // ✅ Hanya CB tak lalu
-            .addDnsServer(dns)
+            .addDnsServer(dns) // ✅ TIADA app filter
     
         vpnInterface = try {
             builder.establish()
@@ -139,46 +138,43 @@ class AppMonitorVPNService : VpnService() {
                 byteArrayOf()
             }
     
-            // ✅ Khusus untuk DNS (port 53) — forward penuh
-            if (destPort == 53 || srcPort == 53) {
-                if (!tcpConnections.containsKey(srcPort)) {
-                    workerPool.execute {
-                        val fd = vpnInterface?.fileDescriptor ?: return@execute
-                        try {
-                            val socket = Socket(destIp, destPort)
-                            socket.soTimeout = 5000
-                            tcpConnections[srcPort] = socket
+            if (!tcpConnections.containsKey(srcPort)) {
+                workerPool.execute {
+                    val fd = vpnInterface?.fileDescriptor ?: return@execute
+                    try {
+                        val socket = Socket(destIp, destPort)
+                        socket.soTimeout = 8000
+                        tcpConnections[srcPort] = socket
     
-                            workerPool.execute {
-                                val outStream = FileOutputStream(fd)
-                                val inStream = socket.getInputStream()
-                                val buf = ByteArray(2048)
-                                try {
-                                    while (forwardingActive && socket.isConnected && !socket.isClosed) {
-                                        val n = inStream.read(buf)
-                                        if (n <= 0) break
-                                        val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
-                                        outStream.write(reply)
-                                        outStream.flush()
-                                    }
-                                } catch (_: Exception) {}
-                                tcpConnections.remove(srcPort)
-                                socket.close()
-                            }
-    
-                            if (payload.isNotEmpty()) {
-                                socket.getOutputStream().write(payload)
-                                socket.getOutputStream().flush()
-                            }
-                        } catch (_: Exception) {
+                        workerPool.execute {
+                            val outStream = FileOutputStream(fd)
+                            val inStream = socket.getInputStream()
+                            val buf = ByteArray(2048)
+                            try {
+                                while (forwardingActive && socket.isConnected && !socket.isClosed) {
+                                    val n = inStream.read(buf)
+                                    if (n <= 0) break
+                                    val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
+                                    outStream.write(reply)
+                                    outStream.flush()
+                                }
+                            } catch (_: Exception) {}
                             tcpConnections.remove(srcPort)
+                            socket.close()
                         }
+    
+                        if (payload.isNotEmpty()) {
+                            socket.getOutputStream().write(payload)
+                            socket.getOutputStream().flush()
+                        }
+                    } catch (_: Exception) {
+                        tcpConnections.remove(srcPort)
                     }
-                } else {
-                    tcpConnections[srcPort]?.getOutputStream()?.let {
-                        it.write(payload)
-                        it.flush()
-                    }
+                }
+            } else {
+                tcpConnections[srcPort]?.getOutputStream()?.let {
+                    it.write(payload)
+                    it.flush()
                 }
             }
     
