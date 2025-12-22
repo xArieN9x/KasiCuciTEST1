@@ -35,12 +35,16 @@ class AppMonitorVPNService : VpnService() {
         // ✅ KONFIGURASI FIXED UNTUK REALME C3
         val builder = Builder()
         builder.setSession("CBTunnel")
-            .setMtu(1500)  // MTU standard
+            .setMtu(1500)
             .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 0)  // ✅ ROUTE DEFAULT SEMUA TRAFIK
+            .addRoute("0.0.0.0", 0)
             .addDnsServer("1.1.1.1")
-            .addDnsServer("8.8.8.8")  // DNS backup
-            .setAllowBypass(true)     // Allow apps bypass VPN jika perlu
+            .addDnsServer("8.8.8.8")
+
+        // Allow bypass hanya untuk API 29+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            builder.setAllowBypass(true)
+        }
     
         // IPv6 (optional)
         try {
