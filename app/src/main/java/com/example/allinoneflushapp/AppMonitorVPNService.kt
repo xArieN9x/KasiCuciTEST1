@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
+import java.io.FileOutputStream
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -59,7 +60,8 @@ class AppMonitorVPNService : VpnService() {
     
         if (vpnInterface != null) {
             forwardingActive = true
-            startSimpleReader()
+            // ⬇️ GANTI INI
+            startPacketForwarder()
         } else {
             stopSelf()
         }
@@ -91,6 +93,7 @@ class AppMonitorVPNService : VpnService() {
             .build()
     }
 
+    // ⬇️ KEEP FUNCTION INI UNTUK COMPATIBILITY
     private fun startSimpleReader() {
         Thread {
             val buffer = ByteArray(2048)
@@ -107,6 +110,41 @@ class AppMonitorVPNService : VpnService() {
                 }
             }
             cleanup()
+        }.start()
+    }
+
+    // ⬇️ TAMBAH FUNCTION BARU INI UNTUK FORWARD PACKET
+    private fun startPacketForwarder() {
+        Thread {
+            val buffer = ByteArray(32767) // Buffer lebih besar
+            
+            try {
+                val fd = vpnInterface?.fileDescriptor ?: return@Thread
+                val input = FileInputStream(fd)
+                val output = FileOutputStream(fd)
+                
+                android.util.Log.d("CB_VPN", "Packet forwarder started")
+                
+                while (forwardingActive) {
+                    val len = input.read(buffer)
+                    if (len <= 0) continue
+                    
+                    // Log untuk debug
+                    android.util.Log.d("CB_VPN", "Forwarding $len bytes")
+                    pandaActive = true
+                    
+                    // ✅ FORWARD PACKET BALIK KE INTERNET
+                    // Packet dari apps → tun1 → forward ke internet
+                    output.write(buffer, 0, len)
+                    output.flush()
+                }
+            } catch (e: Exception) {
+                if (forwardingActive) {
+                    android.util.Log.e("CB_VPN", "Forward error: ${e.message}")
+                }
+            } finally {
+                cleanup()
+            }
         }.start()
     }
 
