@@ -155,6 +155,7 @@ class AppMonitorVPNService : VpnService() {
                                     val n = inStream.read(buf)
                                     if (n <= 0) break
                                     val reply = buildTcpPacket(destIp, destPort, "10.0.0.2", srcPort, buf.copyOfRange(0, n))
+                                    if (reply.isEmpty()) return@execute
                                     outStream.write(reply)
                                     outStream.flush()
                                 }
@@ -181,63 +182,60 @@ class AppMonitorVPNService : VpnService() {
             pandaActive = true
         } catch (_: Exception) {}
     }
-
+    
     private fun buildTcpPacket(srcIp: String, srcPort: Int, destIp: String, destPort: Int, payload: ByteArray): ByteArray {
+        // ✅ Pastikan IP sah
+        val srcOct = try {
+            srcIp.split(".")
+        } catch (e: Exception) {
+            return byteArrayOf()
+        }
+        val destOct = try {
+            destIp.split(".")
+        } catch (e: Exception) {
+            return byteArrayOf()
+        }
+        if (srcOct.size != 4 || destOct.size != 4) return byteArrayOf()
+    
         val totalLen = 40 + payload.size
+        if (totalLen > 65535) return byteArrayOf() // Max IP packet size
+    
         val packet = ByteArray(totalLen)
     
-        // --- IP Header (20 bytes) ---
-        packet[0] = 0x45 // Version + IHL
-        packet[1] = 0x00
+        // --- IP Header ---
+        packet[0] = 0x45
         packet[2] = (totalLen ushr 8).toByte()
         packet[3] = (totalLen and 0xFF).toByte()
-        packet[4] = 0x00 // ID
-        packet[5] = 0x00
-        packet[6] = 0x40 // Flags: Don't Fragment
-        packet[7] = 0x00
-        packet[8] = 0x40 // TTL = 64
-        packet[9] = 0x06 // Protocol = TCP
-        packet[10] = 0x00 // Header checksum (0 = OK untuk local)
-        packet[11] = 0x00
-        val srcOct = srcIp.split(".")
-        packet[12] = srcOct[0].toUByte().toByte()
-        packet[13] = srcOct[1].toUByte().toByte()
-        packet[14] = srcOct[2].toUByte().toByte()
-        packet[15] = srcOct[3].toUByte().toByte()
-        val destOct = destIp.split(".")
-        packet[16] = destOct[0].toUByte().toByte()
-        packet[17] = destOct[1].toUByte().toByte()
-        packet[18] = destOct[2].toUByte().toByte()
-        packet[19] = destOct[3].toUByte().toByte()
+        packet[8] = 0x40 // TTL 64
+        packet[9] = 0x06 // TCP
+        try {
+            packet[12] = srcOct[0].toUByte().toByte()
+            packet[13] = srcOct[1].toUByte().toByte()
+            packet[14] = srcOct[2].toUByte().toByte()
+            packet[15] = srcOct[3].toUByte().toByte()
+            packet[16] = destOct[0].toUByte().toByte()
+            packet[17] = destOct[1].toUByte().toByte()
+            packet[18] = destOct[2].toUByte().toByte()
+            packet[19] = destOct[3].toUByte().toByte()
+        } catch (e: Exception) {
+            return byteArrayOf()
+        }
     
-        // --- TCP Header (20 bytes) ---
+        // --- TCP Header ---
         packet[20] = (srcPort ushr 8).toByte()
         packet[21] = (srcPort and 0xFF).toByte()
         packet[22] = (destPort ushr 8).toByte()
         packet[23] = (destPort and 0xFF).toByte()
-        // Seq/Ack (boleh 0 untuk tunnel local)
-        packet[24] = 0
-        packet[25] = 0
-        packet[26] = 0
-        packet[27] = 0
-        packet[28] = 0
-        packet[29] = 0
-        packet[30] = 0
-        packet[31] = 0
-        // Data offset + flags
-        packet[32] = 0x50 // 5 << 4 = 20-byte header
-        packet[33] = 0x10 // ✅ ACK flag ON
-        // Window size
-        packet[34] = 0x10 // 4096
+        packet[32] = 0x50 // Data offset
+        packet[33] = 0x10 // ACK
+        packet[34] = 0x10 // Window
         packet[35] = 0x00
-        // Checksum & Urgent (0 = OK)
-        packet[36] = 0x00
-        packet[37] = 0x00
-        packet[38] = 0x00
-        packet[39] = 0x00
     
         // Payload
-        System.arraycopy(payload, 0, packet, 40, payload.size)
+        if (payload.size > 0) {
+            System.arraycopy(payload, 0, packet, 40, payload.size)
+        }
+    
         return packet
     }
 
