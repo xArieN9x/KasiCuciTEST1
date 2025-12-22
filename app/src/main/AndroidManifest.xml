@@ -53,6 +53,10 @@
             android:name=".AppMonitorVPNService"
             android:exported="false"
             android:foregroundServiceType="specialUse">
+            <!-- ✅ WAJIB: declare VpnService intent -->
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="vpn_tunnel"/>
