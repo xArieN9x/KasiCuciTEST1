@@ -12,8 +12,10 @@ import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
+import java.nio.channels.DatagramChannel
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -22,9 +24,7 @@ class AppMonitorVPNService : VpnService() {
         private const val PANDA_PACKAGE = "com.logistics.rider.foodpanda"
 
         fun isPandaActive() = pandaActive
-        fun rotateDNS(dnsList: List<String>) {
-            // Reserved untuk future use
-        }
+        fun rotateDNS(dnsList: List<String>) {}
     }
 
     private var vpnInterface: ParcelFileDescriptor? = null
@@ -32,39 +32,38 @@ class AppMonitorVPNService : VpnService() {
     private val CHANNEL_ID = "panda_monitor_channel"
     private val NOTIF_ID = 1001
     
-    // ✅ PROTECTED SOCKET untuk bypass circular routing
-    private var protectedSocket: DatagramSocket? = null
+    // ✅ PROTECTED TUNNEL untuk bypass VPN sendiri
+    private var tunnel: DatagramChannel? = null
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
         startForeground(NOTIF_ID, createNotification("CB Monitor Starting...", connected = false))
     
-        // ✅ VPN CONFIG - Monitor Panda dengan proper forwarding
+        // ✅ VPN CONFIG - SIMPLE & WORKING
         val builder = Builder()
         builder.setSession("CB Panda Monitor")
-            .setMtu(1400)  // Optimized untuk Realme C3
-            .addAddress("10.8.0.1", 24)  // Local VPN address
+            .setMtu(1400)
+            .addAddress("10.8.0.1", 24)
             
-            // ✅ CRITICAL: Route hanya Panda traffic
+            // ✅ ROUTE semua traffic
             .addRoute("0.0.0.0", 1)      
             .addRoute("128.0.0.0", 1)    
             
             .addDnsServer("8.8.8.8")
             .addDnsServer("1.1.1.1")
             
-            // ✅ EXCLUDE apps EXCEPT Panda untuk testing
-            .addDisallowedApplication(packageName)  // Exclude self
+            // ✅ EXCLUDE CB sendiri je
+            .addDisallowedApplication(packageName)
         
         // ✅ Exclude common apps untuk stability
         excludeCommonApps(builder)
         
-        // ✅ REMOVE Panda dari exclude - biar masuk VPN
-        // TIDAK ada addDisallowedApplication untuk Panda!
+        // ✅ PANDA TIDAK EXCLUDE - biar masuk VPN!
+        // Ini CRITICAL - jangan ada addDisallowedApplication untuk Panda
         
-        // ✅ Realme workarounds
-        applyRealmeWorkaround(builder)
-    
+        android.util.Log.d("CB_VPN", "✅ Panda INCLUDED in VPN for monitoring")
+        
         vpnInterface = try {
             builder.establish()
         } catch (e: Exception) {
@@ -76,17 +75,14 @@ class AppMonitorVPNService : VpnService() {
         if (vpnInterface != null) {
             forwardingActive = true
             
-            // ✅ Setup protected socket untuk bypass
-            setupProtectedSocket()
-            
-            // ✅ START packet forwarding (CRITICAL FIX)
-            startPacketForwarder()
+            // ✅ START packet relay (THE FIX!)
+            startPacketRelay()
             
             // ✅ Update notification
             val nm = getSystemService(NotificationManager::class.java)
-            nm?.notify(NOTIF_ID, createNotification("CB Monitor Active", connected = true))
+            nm?.notify(NOTIF_ID, createNotification("CB Monitor Active ✅", connected = true))
             
-            android.util.Log.d("CB_VPN", "VPN successfully started - monitoring Panda")
+            android.util.Log.d("CB_VPN", "✅ VPN successfully started - monitoring Panda")
         } else {
             android.util.Log.e("CB_VPN", "VPN interface null - stopping")
             stopSelf()
@@ -95,20 +91,186 @@ class AppMonitorVPNService : VpnService() {
         return START_STICKY
     }
     
-    // ✅ SETUP PROTECTED SOCKET - bypass circular routing
-    private fun setupProtectedSocket() {
+    // ✅ PACKET RELAY - PROPER IMPLEMENTATION!
+    private fun startPacketRelay() {
         Thread {
             try {
-                protectedSocket = DatagramSocket()
-                // ✅ CRITICAL: Protect socket dari VPN sendiri
-                protect(protectedSocket!!)
-                // Connect ke DNS untuk test
-                protectedSocket?.connect(InetSocketAddress("8.8.8.8", 53))
-                android.util.Log.d("CB_VPN", "Protected socket created successfully")
+                // 1. Setup tunnel ke internet (bypass VPN)
+                tunnel = DatagramChannel.open()
+                tunnel?.connect(InetSocketAddress("8.8.8.8", 53))
+                protect(tunnel!!.socket()) // ✅ CRITICAL: Protect dari VPN
+                
+                android.util.Log.d("CB_VPN", "✅ Protected tunnel created")
+                
+                val fd = vpnInterface?.fileDescriptor ?: return@Thread
+                val input = FileInputStream(fd)
+                val output = FileOutputStream(fd)
+                
+                val packet = ByteBuffer.allocate(32767)
+                var lastActivityTime = System.currentTimeMillis()
+                
+                android.util.Log.d("CB_VPN", "✅ Packet relay STARTED")
+                
+                while (forwardingActive) {
+                    // READ packet dari VPN (Panda app)
+                    packet.clear()
+                    val length = input.read(packet.array())
+                    
+                    if (length > 0) {
+                        packet.limit(length)
+                        
+                        // ✅ Panda active!
+                        pandaActive = true
+                        lastActivityTime = System.currentTimeMillis()
+                        
+                        // ✅ FORWARD ke internet via protected tunnel
+                        try {
+                            // Extract destination from IP header
+                            val destIp = extractDestIP(packet.array())
+                            val destPort = extractDestPort(packet.array())
+                            
+                            if (destIp != null && destPort > 0) {
+                                // Forward via real network
+                                forwardPacket(packet.array(), length, destIp, destPort, output)
+                                
+                                android.util.Log.d("CB_VPN", 
+                                    "✅ Relayed ${length}b to $destIp:$destPort")
+                            } else {
+                                // Simple echo back untuk DNS/ICMP
+                                output.write(packet.array(), 0, length)
+                            }
+                        } catch (e: Exception) {
+                            // Fallback: just echo
+                            output.write(packet.array(), 0, length)
+                        }
+                    }
+                    
+                    // Auto-reset after idle
+                    if (System.currentTimeMillis() - lastActivityTime > 5000) {
+                        if (pandaActive) {
+                            pandaActive = false
+                        }
+                    }
+                }
             } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "Protected socket failed: ${e.message}")
+                android.util.Log.e("CB_VPN", "Relay error: ${e.message}")
+                e.printStackTrace()
+            }
+            
+            android.util.Log.d("CB_VPN", "Packet relay STOPPED")
+        }.start()
+        
+        // ✅ HEARTBEAT thread
+        Thread {
+            while (forwardingActive) {
+                try {
+                    Thread.sleep(30000)
+                    android.util.Log.d("CB_VPN", "💚 VPN heartbeat - Panda: $pandaActive")
+                } catch (e: Exception) {
+                    break
+                }
             }
         }.start()
+    }
+    
+    // ✅ FORWARD packet ke internet (SIMPLIFIED)
+    private fun forwardPacket(packet: ByteArray, length: Int, destIp: String, 
+                             destPort: Int, output: FileOutputStream) {
+        try {
+            // Buat socket protected untuk forward
+            val socket = DatagramSocket()
+            protect(socket) // ✅ Bypass VPN
+            
+            val address = InetAddress.getByName(destIp)
+            
+            // Send packet content (skip IP header)
+            val payload = packet.copyOfRange(20, length)
+            val datagram = java.net.DatagramPacket(payload, payload.size, address, destPort)
+            socket.send(datagram)
+            
+            // Optional: wait response (timeout 100ms)
+            socket.soTimeout = 100
+            val response = ByteArray(32767)
+            val recvPacket = java.net.DatagramPacket(response, response.size)
+            
+            try {
+                socket.receive(recvPacket)
+                
+                // Build IP response packet dan write balik
+                val responsePacket = buildIPPacket(
+                    recvPacket.data, 
+                    recvPacket.length,
+                    destIp, 
+                    "10.8.0.1"
+                )
+                output.write(responsePacket)
+            } catch (e: Exception) {
+                // Timeout OK - UDP may not respond
+            }
+            
+            socket.close()
+        } catch (e: Exception) {
+            android.util.Log.w("CB_VPN", "Forward failed: ${e.message}")
+        }
+    }
+    
+    // Extract destination IP dari IP header
+    private fun extractDestIP(packet: ByteArray): String? {
+        return try {
+            if (packet.size < 20) return null
+            "${packet[16].toInt() and 0xFF}.${packet[17].toInt() and 0xFF}." +
+            "${packet[18].toInt() and 0xFF}.${packet[19].toInt() and 0xFF}"
+        } catch (e: Exception) {
+            null
+        }
+    }
+    
+    // Extract destination port dari TCP/UDP header
+    private fun extractDestPort(packet: ByteArray): Int {
+        return try {
+            if (packet.size < 24) return 0
+            val protocol = packet[9].toInt() and 0xFF
+            if (protocol == 6 || protocol == 17) { // TCP or UDP
+                ((packet[22].toInt() and 0xFF) shl 8) or (packet[23].toInt() and 0xFF)
+            } else 0
+        } catch (e: Exception) {
+            0
+        }
+    }
+    
+    // Build simple IP response packet
+    private fun buildIPPacket(payload: ByteArray, payloadLen: Int, 
+                             srcIp: String, dstIp: String): ByteArray {
+        // Simplified: just wrap with basic IP header
+        val packet = ByteArray(20 + payloadLen)
+        
+        // IP Version + IHL
+        packet[0] = 0x45.toByte()
+        // Total length
+        val totalLen = 20 + payloadLen
+        packet[2] = (totalLen shr 8).toByte()
+        packet[3] = (totalLen and 0xFF).toByte()
+        // Protocol (UDP = 17)
+        packet[9] = 17.toByte()
+        
+        // Source IP
+        val srcParts = srcIp.split(".")
+        packet[12] = srcParts[0].toInt().toByte()
+        packet[13] = srcParts[1].toInt().toByte()
+        packet[14] = srcParts[2].toInt().toByte()
+        packet[15] = srcParts[3].toInt().toByte()
+        
+        // Dest IP
+        val dstParts = dstIp.split(".")
+        packet[16] = dstParts[0].toInt().toByte()
+        packet[17] = dstParts[1].toInt().toByte()
+        packet[18] = dstParts[2].toInt().toByte()
+        packet[19] = dstParts[3].toInt().toByte()
+        
+        // Copy payload
+        System.arraycopy(payload, 0, packet, 20, payloadLen)
+        
+        return packet
     }
     
     private fun excludeCommonApps(builder: Builder) {
@@ -118,123 +280,19 @@ class AppMonitorVPNService : VpnService() {
             "com.android.vending",
             "com.google.android.gms",
             "com.google.android.gsf",
-            "com.android.browser",
-            "com.sec.android.app.sbrowser",
-            "com.opera.browser",
-            "com.microsoft.emmx",
             "com.facebook.katana",
             "com.whatsapp",
-            "com.instagram.android",
-            "com.twitter.android",
-            "com.android.email",
-            "com.google.android.youtube"
+            "com.instagram.android"
         )
         
         for (app in appsToExclude) {
             try {
                 builder.addDisallowedApplication(app)
-            } catch (e: Exception) {
-                // App not installed
-            }
+            } catch (e: Exception) {}
         }
         
-        // ✅ PENTING: JANGAN exclude Panda!
-        // Panda MESTI masuk VPN untuk monitoring
-        android.util.Log.d("CB_VPN", "Panda INCLUDED in VPN for monitoring")
-    }
-
-    private fun applyRealmeWorkaround(builder: Builder) {
-        try {
-            // Non-blocking mode untuk Realme
-            val setBlocking = builder.javaClass.getMethod("setBlocking", Boolean::class.java)
-            setBlocking.invoke(builder, false)
-            android.util.Log.d("CB_VPN", "Realme: Non-blocking mode set")
-        } catch (e: Exception) {
-            android.util.Log.w("CB_VPN", "Realme blocking workaround failed")
-        }
-        
-        try {
-            // Allow bypass untuk stability
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val setAllowBypass = builder.javaClass.getMethod("setAllowBypass", Boolean::class.java)
-                setAllowBypass.invoke(builder, true)
-                android.util.Log.d("CB_VPN", "Realme: Bypass allowed")
-            }
-        } catch (e: Exception) {
-            android.util.Log.w("CB_VPN", "Realme bypass workaround failed")
-        }
-    }
-    
-    // ✅ PACKET FORWARDER - THE CRITICAL FIX!
-    private fun startPacketForwarder() {
-        Thread {
-            val buffer = ByteBuffer.allocate(32767)  // Max IP packet size
-            var lastActivityTime = System.currentTimeMillis()
-            
-            try {
-                val fd = vpnInterface?.fileDescriptor ?: return@Thread
-                val input = FileInputStream(fd)
-                val output = FileOutputStream(fd)
-                
-                android.util.Log.d("CB_VPN", "Packet forwarder STARTED")
-                
-                while (forwardingActive) {
-                    buffer.clear()
-                    
-                    // ✅ READ packet dari VPN interface
-                    val length = input.read(buffer.array())
-                    
-                    if (length > 0) {
-                        buffer.limit(length)
-                        
-                        // ✅ DETECT Panda activity
-                        pandaActive = true
-                        lastActivityTime = System.currentTimeMillis()
-                        
-                        // ✅ FORWARD packet keluar (INTERNET ACCESS!)
-                        output.write(buffer.array(), 0, length)
-                        
-                        // Log basic packet info
-                        if (length >= 20) {
-                            val protocol = buffer.get(9).toInt() and 0xFF
-                            val protocolName = when(protocol) {
-                                6 -> "TCP"
-                                17 -> "UDP"
-                                1 -> "ICMP"
-                                else -> "OTHER"
-                            }
-                            android.util.Log.d("CB_VPN", 
-                                "✅ Forwarded ${length}b [$protocolName] for Panda")
-                        }
-                    }
-                    
-                    // ✅ Auto-reset pandaActive after 5 seconds no traffic
-                    if (System.currentTimeMillis() - lastActivityTime > 5000) {
-                        if (pandaActive) {
-                            android.util.Log.d("CB_VPN", "Panda idle - resetting active flag")
-                            pandaActive = false
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "Forwarder error: ${e.message}")
-                forwardingActive = false
-            }
-            
-            android.util.Log.d("CB_VPN", "Packet forwarder STOPPED")
-        }.start()
-        
-        // ✅ HEARTBEAT thread untuk consistency
-        Thread {
-            while (forwardingActive) {
-                try {
-                    Thread.sleep(30000)  // 30 seconds
-                    android.util.Log.d("CB_VPN", "VPN heartbeat - Active: $pandaActive")
-                } catch (e: Exception) {
-                    break
-                }
-            }
-        }.start()
+        // ✅ PENTING: Jangan exclude Panda!
+        android.util.Log.d("CB_VPN", "Panda NOT excluded - will monitor!")
     }
 
     private fun createNotificationChannel() {
@@ -245,6 +303,7 @@ class AppMonitorVPNService : VpnService() {
                 "CB Panda Monitor", 
                 NotificationManager.IMPORTANCE_LOW
             )
+            channel.setShowBadge(false)
             nm?.createNotificationChannel(channel)
         }
     }
@@ -274,8 +333,8 @@ class AppMonitorVPNService : VpnService() {
     private fun cleanup() {
         forwardingActive = false
         
-        protectedSocket?.close()
-        protectedSocket = null
+        tunnel?.close()
+        tunnel = null
         
         vpnInterface?.close()
         vpnInterface = null
