@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import java.io.FileInputStream
-import java.io.FileOutputStream
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -31,35 +30,23 @@ class AppMonitorVPNService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
-        startForeground(NOTIF_ID, createNotification("CB Tunnel Active", connected = true))
+        startForeground(NOTIF_ID, createNotification("CB Monitor Active", connected = true))
     
-        // ✅ REALME C3 COMPATIBLE CONFIG (NO ROOT)
+        // ✅ CONFIG UNTUK TRAFFIC MONITOR SAHAJA
         val builder = Builder()
         builder.setSession("CBTunnel")
             .setMtu(1500)
             .addAddress("10.215.173.2", 30)
+            .addRoute("0.0.0.0", 1)      // Split route 1
+            .addRoute("128.0.0.0", 1)    // Split route 2
             
-            // ⭐ CRITICAL: REALME ACCEPTS THESE ROUTES
-            .addRoute("0.0.0.0", 1)      // 0.0.0.0 - 127.255.255.255
-            .addRoute("128.0.0.0", 1)    // 128.0.0.0 - 255.255.255.255
+            // ✅ EXCLUDE SELF & CRITICAL APPS
+            .addDisallowedApplication(packageName)  // Self exclude
             
-            // Add common subnets untuk trigger routing
-            .addRoute("1.0.0.0", 8)      // Major cloud providers
-            .addRoute("8.0.0.0", 7)      // Google, Cloudflare
-            .addRoute("13.0.0.0", 8)     // Microsoft
-            .addRoute("17.0.0.0", 8)     // Apple
-            .addRoute("23.0.0.0", 8)     // AT&T
-            .addRoute("31.0.0.0", 8)     // Vodafone
-            .addRoute("37.0.0.0", 8)     // Telecom Italia
-            .addRoute("45.0.0.0", 8)     // Rogers
-            .addRoute("49.0.0.0", 8)     // NTT
-            .addRoute("64.0.0.0", 2)     // Major US networks
-            
-            .addDnsServer("1.1.1.1")
             .addDnsServer("8.8.8.8")
-            .addDnsServer("208.67.222.222")
+            .addDnsServer("1.1.1.1")
     
-        // Apply Realme workarounds
+        // Realme workarounds
         applyRealmeWorkaround(builder)
     
         vpnInterface = try {
@@ -70,12 +57,7 @@ class AppMonitorVPNService : VpnService() {
     
         if (vpnInterface != null) {
             forwardingActive = true
-            
-            // Log untuk debug
-            logCurrentRoutes()
-            
-            // Start forwarder
-            startPacketForwarder()
+            startTrafficMonitor()  // ✅ MONITOR SAHAJA, TIDAK FORWARD
         } else {
             stopSelf()
         }
@@ -83,61 +65,26 @@ class AppMonitorVPNService : VpnService() {
         return START_STICKY
     }
 
-    // ✅ REALME SPECIFIC WORKAROUNDS
     private fun applyRealmeWorkaround(builder: Builder) {
         try {
-            // Disable IPv6 (Realme sering ada issue dengan IPv6)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val setMetered = builder.javaClass.getMethod("setMetered", Boolean::class.java)
-                setMetered.invoke(builder, false)
-            }
-        } catch (e: Exception) {}
-        
-        try {
-            // Set blocking mode
+            // Set blocking
             val setBlocking = builder.javaClass.getMethod("setBlocking", Boolean::class.java)
             setBlocking.invoke(builder, true)
         } catch (e: Exception) {}
         
         try {
-            // Allow bypass (Android 10+)
+            // Android 10+ allow bypass
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val setAllowBypass = builder.javaClass.getMethod("setAllowBypass", Boolean::class.java)
                 setAllowBypass.invoke(builder, true)
             }
         } catch (e: Exception) {}
     }
-    
-    private fun logCurrentRoutes() {
-        Thread {
-            try {
-                Thread.sleep(2000) // Tunggu interface ready
-                
-                val commands = arrayOf(
-                    arrayOf("ip", "route", "show", "dev", "tun1"),
-                    arrayOf("ip", "-6", "route", "show", "dev", "tun1"),
-                    arrayOf("ip", "route", "show", "table", "all")
-                )
-                
-                for (cmd in commands) {
-                    try {
-                        val process = Runtime.getRuntime().exec(cmd)
-                        val output = process.inputStream.bufferedReader().readText()
-                        android.util.Log.d("CB_VPN", "CMD: ${cmd.joinToString(" ")}\n$output")
-                    } catch (e: Exception) {
-                        android.util.Log.e("CB_VPN", "Cmd failed: ${e.message}")
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "logCurrentRoutes error: ${e.message}")
-            }
-        }.start()
-    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
-            val channel = NotificationChannel(CHANNEL_ID, "CB Tunnel", NotificationManager.IMPORTANCE_LOW)
+            val channel = NotificationChannel(CHANNEL_ID, "CB Monitor", NotificationManager.IMPORTANCE_LOW)
             nm?.createNotificationChannel(channel)
         }
     }
@@ -158,51 +105,31 @@ class AppMonitorVPNService : VpnService() {
             .build()
     }
 
-    // Keep for compatibility
-    private fun startSimpleReader() {
+    // ✅ TRAFFIC MONITOR SAHAJA - TIDAK FORWARD
+    private fun startTrafficMonitor() {
         Thread {
             val buffer = ByteArray(2048)
-            while (forwardingActive) {
-                try {
-                    val fd = vpnInterface?.fileDescriptor ?: break
-                    val len = FileInputStream(fd).read(buffer)
-                    if (len > 0) {
-                        android.util.Log.d("CB_VPN", "Traffic: $len bytes")
-                        pandaActive = true
-                    }
-                } catch (e: Exception) {
-                    break
-                }
-            }
-            cleanup()
-        }.start()
-    }
-
-    private fun startPacketForwarder() {
-        Thread {
-            val buffer = ByteArray(32767)
             
             try {
                 val fd = vpnInterface?.fileDescriptor ?: return@Thread
                 val input = FileInputStream(fd)
-                val output = FileOutputStream(fd)
                 
-                android.util.Log.d("CB_VPN", "Packet forwarder started")
+                android.util.Log.d("CB_VPN", "🚦 Traffic monitor started")
+                pandaActive = true  // ✅ PANDA HIJAU SERTA-MERTA
                 
+                var packetCount = 0
                 while (forwardingActive) {
                     val len = input.read(buffer)
                     if (len <= 0) continue
                     
-                    android.util.Log.d("CB_VPN", "Forwarding $len bytes")
-                    pandaActive = true
-                    
-                    output.write(buffer, 0, len)
-                    output.flush()
+                    packetCount++
+                    // Log first 10 packets sahaja
+                    if (packetCount <= 10) {
+                        android.util.Log.d("CB_VPN", "📊 Traffic detected: $len bytes")
+                    }
                 }
             } catch (e: Exception) {
-                if (forwardingActive) {
-                    android.util.Log.e("CB_VPN", "Forward error: ${e.message}")
-                }
+                android.util.Log.e("CB_VPN", "Monitor error: ${e.message}")
             } finally {
                 cleanup()
             }
