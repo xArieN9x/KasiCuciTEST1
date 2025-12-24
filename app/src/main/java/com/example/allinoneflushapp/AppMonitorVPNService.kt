@@ -89,9 +89,9 @@ class AppMonitorVPNService : VpnService() {
                 bin.setExecutable(true, false)
     
                 // 🔴 PENTING #2: DETACH TUN FD
-                val tunFd = vpnInterface!!.fileDescriptor.detachFd()
+                val tunFd = vpnInterface!!.detachFd()
                 android.util.Log.d("CB_VPN", "Detached TUN FD: $tunFd")
-    
+                
                 android.util.Log.d("CB_VPN", "Binary: ${bin.absolutePath}")
     
                 // 🔴 PENTING #3: command yang BETUL untuk tun2socks (xjasonlyu)
