@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
 import android.content.Intent
 import android.net.VpnService
 import android.os.Build
@@ -13,9 +12,7 @@ import androidx.core.app.NotificationCompat
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.net.Socket
 import java.util.concurrent.Executors
 
 class AppMonitorVPNService : VpnService() {
@@ -46,7 +43,7 @@ class AppMonitorVPNService : VpnService() {
         
         // 🔥 LOG 1: Service started
         android.util.Log.d("CB_VPN", "VPN Service STARTING - onStartCommand()")
-        
+    
         // Setup VPN Builder
         val builder = Builder()
         builder.setSession("CB Monitor")
@@ -59,13 +56,13 @@ class AppMonitorVPNService : VpnService() {
         // CRITICAL: Jangan exclude Panda atau apps lain
         // Hanya exclude diri sendiri untuk elak loop
         builder.addDisallowedApplication(packageName)
-        
+    
         // Realme workarounds (keep existing)
         applyRealmeWorkaround(builder)
-        
+    
         // 🔥 LOG 2: Before establish
         android.util.Log.d("CB_VPN", "Calling builder.establish()...")
-        
+    
         vpnInterface = try {
             val iface = builder.establish()
             android.util.Log.d("CB_VPN", "VPN Interface established SUCCESS")
@@ -75,7 +72,7 @@ class AppMonitorVPNService : VpnService() {
             e.printStackTrace()
             null
         }
-        
+    
         if (vpnInterface != null) {
             forwardingActive = true
             
@@ -100,12 +97,12 @@ class AppMonitorVPNService : VpnService() {
             android.util.Log.e("CB_VPN", "VPN Interface is NULL - stopping service")
             stopSelf()
         }
-        
+    
         return START_STICKY
     }
     
     // ==============================
-    // TUN2SOCKS IMPLEMENTATION
+    // TUN2SOCKS IMPLEMENTATION (WITH LOGGING)
     // ==============================
     private fun startTun2SocksForwarding() {
         // 🔥 LOG 4: Function entered
@@ -154,18 +151,20 @@ class AppMonitorVPNService : VpnService() {
                     .redirectErrorStream(true)
                     .start()
                 
-                android.util.Log.d("CB_VPN", "✅ tun2socks process started. PID?")
+                android.util.Log.d("CB_VPN", "✅ tun2socks process started")
                 
-                // Read tun2socks output (for debugging)
+                // Simple output reader (non-blocking)
                 Thread {
                     try {
-                        val reader = BufferedReader(InputStreamReader(tun2socksProcess!!.inputStream))
-                        var line: String?
-                        while (reader.readLine().also { line = it } != null) {
-                            android.util.Log.d("CB_VPN_TUN2SOCKS", "tun2socks: $line")
+                        val inputStream = tun2socksProcess!!.inputStream
+                        val buffer = ByteArray(1024)
+                        var bytesRead: Int
+                        while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                            val output = String(buffer, 0, bytesRead)
+                            android.util.Log.d("CB_VPN_TUN2SOCKS", "tun2socks: $output")
                         }
                     } catch (e: Exception) {
-                        android.util.Log.e("CB_VPN", "tun2socks output reader error: ${e.message}")
+                        // Ignore
                     }
                 }.start()
                 
@@ -209,16 +208,27 @@ class AppMonitorVPNService : VpnService() {
                 Build.CPU_ABI
             }
             
+            android.util.Log.d("CB_VPN", "Device ABI: $abi")
+            
             // Asset file name based on architecture
             val assetName = when {
                 abi.startsWith("arm64") -> "tun2socks_arm64"
                 abi.startsWith("armeabi") -> "tun2socks_arm"
                 abi.startsWith("x86_64") -> "tun2socks_x86_64"
                 abi.startsWith("x86") -> "tun2socks_x86"
-                else -> "tun2socks_arm64" // default
+                else -> "tun2socks_arm64"
             }
             
-            // Read from assets
+            android.util.Log.d("CB_VPN", "Looking for asset: $assetName")
+            
+            // Check if asset exists
+            try {
+                val assetsList = assets.list("")
+                android.util.Log.d("CB_VPN", "Assets list: ${assetsList?.joinToString()}")
+            } catch (e: Exception) {
+                android.util.Log.e("CB_VPN", "Cannot list assets: ${e.message}")
+            }
+            
             val inputStream = assets.open(assetName)
             val outputFile = File(cacheDir, "tun2socks")
             val outputStream = FileOutputStream(outputFile)
@@ -227,13 +237,17 @@ class AppMonitorVPNService : VpnService() {
             inputStream.close()
             outputStream.close()
             
-            // Make executable
-            outputFile.setExecutable(true)
+            android.util.Log.d("CB_VPN", "File size: ${outputFile.length()} bytes")
             
-            android.util.Log.d("CB_VPN", "Extracted tun2socks to: ${outputFile.absolutePath}")
+            // Make executable
+            val success = outputFile.setExecutable(true)
+            android.util.Log.d("CB_VPN", "Set executable: $success")
+            
+            android.util.Log.d("CB_VPN", "✅ Extracted tun2socks to: ${outputFile.absolutePath}")
             outputFile
         } catch (e: Exception) {
-            android.util.Log.e("CB_VPN", "Failed to extract binary: ${e.message}")
+            android.util.Log.e("CB_VPN", "❌ Failed to extract binary: ${e.message}")
+            e.printStackTrace()
             null
         }
     }
@@ -242,8 +256,9 @@ class AppMonitorVPNService : VpnService() {
         executor.submit {
             try {
                 // Accept connection from tun2socks
+                android.util.Log.d("CB_VPN", "SOCKS5: Waiting for connection...")
                 val clientSocket = socksServer!!.accept()
-                android.util.Log.d("CB_VPN", "SOCKS5 client connected")
+                android.util.Log.d("CB_VPN", "✅ SOCKS5 client connected")
                 
                 // Simple SOCKS5 handshake (transparent mode)
                 val input = clientSocket.getInputStream()
@@ -252,7 +267,8 @@ class AppMonitorVPNService : VpnService() {
                 // Read SOCKS5 greeting
                 val version = input.read()
                 val nmethods = input.read()
-                input.read(ByteArray(nmethods))
+                val methods = ByteArray(nmethods)
+                input.read(methods)
                 
                 // Send greeting response
                 output.write(byteArrayOf(0x05, 0x00))
@@ -265,7 +281,7 @@ class AppMonitorVPNService : VpnService() {
                 val response = byteArrayOf(0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
                 output.write(response)
                 
-                android.util.Log.d("CB_VPN", "SOCKS5 handshake complete")
+                android.util.Log.d("CB_VPN", "✅ SOCKS5 handshake complete")
                 
                 // Keep connection alive
                 while (forwardingActive) {
@@ -274,38 +290,9 @@ class AppMonitorVPNService : VpnService() {
                 
                 clientSocket.close()
             } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "SOCKS5 handler error: ${e.message}")
+                android.util.Log.e("CB_VPN", "❌ SOCKS5 handler error: ${e.message}")
             }
         }
-    }
-    
-    // ==============================
-    // MODIFIED TRAFFIC MONITOR
-    // ==============================
-    private fun startTrafficMonitor() {
-        Thread {
-            val buffer = ByteArray(32767)
-            
-            try {
-                val fd = vpnInterface?.fileDescriptor ?: return@Thread
-                val input = FileInputStream(fd)
-                
-                android.util.Log.d("CB_VPN", "Traffic monitor started (with forwarding)")
-                
-                while (forwardingActive) {
-                    val len = input.read(buffer)
-                    if (len > 0) {
-                        // Traffic detected - refresh panda status
-                        pandaActive = true
-                        
-                        // Packet telah dihandle oleh tun2socks (transparent mode)
-                        // No need to manually forward
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("CB_VPN", "Monitor error: ${e.message}")
-            }
-        }.start()
     }
     
     // ==============================
@@ -358,6 +345,41 @@ class AppMonitorVPNService : VpnService() {
         }.start()
     }
     
+    private fun startTrafficMonitor() {
+        Thread {
+            val buffer = ByteArray(32767)
+            
+            try {
+                val fd = vpnInterface?.fileDescriptor ?: return@Thread
+                val input = FileInputStream(fd)
+                
+                android.util.Log.d("CB_VPN", "Traffic monitor started (with forwarding)")
+                
+                while (forwardingActive) {
+                    val len = input.read(buffer)
+                    if (len > 0) {
+                        // Traffic detected - refresh panda status
+                        pandaActive = true
+                        
+                        // Packet telah dihandle oleh tun2socks (transparent mode)
+                        // No need to manually forward
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("CB_VPN", "Monitor error: ${e.message}")
+            }
+        }.start()
+    }
+    
+    private fun startDummyForwarder() {
+        Thread {
+            android.util.Log.d("CB_VPN", "🔄 Dummy forwarder started (fallback mode)")
+            while (forwardingActive) {
+                Thread.sleep(1000)
+            }
+        }.start()
+    }
+    
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nm = getSystemService(NotificationManager::class.java)
@@ -380,15 +402,6 @@ class AppMonitorVPNService : VpnService() {
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
-    }
-
-    private fun startDummyForwarder() {
-        Thread {
-            android.util.Log.d("CB_VPN", "🔄 Dummy forwarder started (fallback mode)")
-            while (forwardingActive) {
-                Thread.sleep(1000)
-            }
-        }.start()
     }
     
     private fun cleanup() {
