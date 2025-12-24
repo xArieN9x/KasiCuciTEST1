@@ -7,6 +7,12 @@ android {
     namespace 'com.example.allinoneflushapp'
     compileSdk 34
 
+    packagingOptions {
+        resources {
+            excludes += ['**/tun2socks*']
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
