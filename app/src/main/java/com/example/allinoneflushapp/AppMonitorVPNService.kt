@@ -20,8 +20,10 @@ class AppMonitorVPNService : VpnService() {
     companion object {
         private var pandaActive = false
         fun isPandaActive() = pandaActive
+        fun rotateDNS(dnsList: List<String>) {}
+          // dummy – future use
     }
-
+    
     private var vpnInterface: ParcelFileDescriptor? = null
     private var running = false
 
