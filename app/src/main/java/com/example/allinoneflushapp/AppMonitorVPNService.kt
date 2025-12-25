@@ -80,27 +80,21 @@ class AppMonitorVPNService : VpnService() {
                 }
     
                 val bin = extractBinary()
-                if (bin == null || !bin.exists()) {
-                    android.util.Log.e("CB_VPN", "Binary extraction FAILED")
+                if (bin == null || !bin.exists() || !bin.canExecute()) {
+                    android.util.Log.e("CB_VPN", "tun2socks binary NOT executable")
                     return@Thread
                 }
     
-                // 🔴 PENTING #1: pastikan executable
-                bin.setExecutable(true, false)
-    
-                // 🔴 PENTING #2: DETACH TUN FD
-                val tunFd = vpnInterface!!.detachFd()
-                android.util.Log.d("CB_VPN", "Detached TUN FD: $tunFd")
-                
+                val tunFd = vpnInterface!!.fd
+                android.util.Log.d("CB_VPN", "Using TUN FD: $tunFd")
                 android.util.Log.d("CB_VPN", "Binary: ${bin.absolutePath}")
     
-                // 🔴 PENTING #3: command yang BETUL untuk tun2socks (xjasonlyu)
+                // ✅ COMMAND YANG BETUL UNTUK xjasonlyu/tun2socks
                 val cmd = arrayOf(
                     bin.absolutePath,
-                    "--tunfd", tunFd.toString(),
-                    "--netif-ipaddr", "10.215.173.2",
-                    "--netif-netmask", "255.255.255.252",
-                    "--socks-server-addr", "127.0.0.1:1080"
+                    "-device", "tun://$tunFd",
+                    "-proxy", "direct://",
+                    "-loglevel", "debug"
                 )
     
                 android.util.Log.d("CB_VPN", "CMD: ${cmd.joinToString(" ")}")
@@ -111,8 +105,10 @@ class AppMonitorVPNService : VpnService() {
     
                 android.util.Log.d("CB_VPN", "✅ tun2socks PROCESS STARTED")
     
-                // Monitor output (KEKAL)
-                val reader = BufferedReader(InputStreamReader(tun2socksProcess!!.inputStream))
+                val reader = BufferedReader(
+                    InputStreamReader(tun2socksProcess!!.inputStream)
+                )
+    
                 var line: String?
                 while (reader.readLine().also { line = it } != null) {
                     android.util.Log.d("CB_TUN2SOCKS", line!!)
@@ -122,17 +118,6 @@ class AppMonitorVPNService : VpnService() {
             } catch (e: Exception) {
                 android.util.Log.e("CB_VPN", "tun2socks ERROR: ${e.message}")
                 e.printStackTrace()
-            }
-        }.start()
-        
-        Thread {
-            while (forwardingActive) {
-                try {
-                    Thread.sleep(30000)
-                    android.util.Log.d("CB_VPN", "💚 Heartbeat")
-                } catch (e: Exception) {
-                    break
-                }
             }
         }.start()
     }
@@ -153,7 +138,8 @@ class AppMonitorVPNService : VpnService() {
             
             android.util.Log.d("CB_VPN", "ABI: $abi, Binary: $name")
             
-            val out = File(cacheDir, "tun2socks")
+            //val out = File(cacheDir, "tun2socks")
+            val out = File(filesDir, "tun2socks")
             assets.open(name).use { inp ->
                 FileOutputStream(out).use { outp ->
                     inp.copyTo(outp)
@@ -162,6 +148,7 @@ class AppMonitorVPNService : VpnService() {
             
             out.setExecutable(true, false)
             out.setReadable(true, false)
+            out.setWritable(true, true)
             
             android.util.Log.d("CB_VPN", "✅ Extracted: ${out.length()} bytes")
             out
