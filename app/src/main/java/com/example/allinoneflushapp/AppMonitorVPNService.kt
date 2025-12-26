@@ -148,19 +148,25 @@ class AppMonitorVPNService : VpnService() {
         Thread {
             try {
                 val sock = Socket()
-                protect(sock)
-                sock.connect(InetSocketAddress(dIp, dPort), 5000)
+                
+                // ✅ PROTECT DULU sebelum connect!
+                if (!protect(sock)) {
+                    android.util.Log.w("CB_VPN", "Socket protect FAILED!")
+                    return@Thread
+                }
+                
+                // ✅ Connect tanpa bind (auto guna real interface)
+                sock.connect(InetSocketAddress(InetAddress.getByName(dIp), dPort), 5000)
                 
                 val pLen = len - 40
                 if (pLen > 0) {
-                    val payload = pkt.copyOfRange(40, 40 + pLen)
-                    sock.getOutputStream().write(payload)
-                    android.util.Log.d("CB_VPN", "✅ TCP sent: $dIp:$dPort (${pLen}b)")
+                    sock.getOutputStream().write(pkt.copyOfRange(40, 40 + pLen))
+                    android.util.Log.d("CB_VPN", "✅ TCP: $dIp:$dPort (${pLen}b)")
                 }
                 
                 sock.close()
             } catch (e: Exception) {
-                android.util.Log.w("CB_VPN", "TCP forward failed: ${e.message}")
+                // Remove log untuk kurangkan spam
             }
         }.start()
     }
