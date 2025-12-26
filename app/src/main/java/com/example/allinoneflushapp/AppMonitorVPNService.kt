@@ -163,11 +163,16 @@ class AppMonitorVPNService : VpnService() {
     
                 channel.connect(InetSocketAddress(dIp, dPort))
     
+                // ==== EXTRACT PAYLOAD ====
+                val ipHdrLen = ((pkt[0].toInt() and 0x0F) * 4)
+                val tcpHdrLen = ((pkt[ipHdrLen + 12].toInt() and 0xF0) shr 4) * 4
+                val payloadOffset = ipHdrLen + tcpHdrLen
+                val payloadLen = len - payloadOffset
+                
                 // ==== SEND PAYLOAD ====
-                val hdrLen = ((pkt[0].toInt() and 0x0F) * 4)
-                val pLen = len - hdrLen
-                if (pLen > 0) {
-                    channel.write(ByteBuffer.wrap(pkt, hdrLen, pLen))
+                if (payloadLen > 0) {
+                    val payload = ByteBuffer.wrap(pkt, payloadOffset, payloadLen)
+                    channel.write(payload)
                 }
     
                 // ==== READ RESPONSE ====
@@ -176,12 +181,20 @@ class AppMonitorVPNService : VpnService() {
     
                 if (readLen > 0) {
                     buf.flip()
-    
-                    // ⚠️ MINIMAL TCP RESP (PASS-THROUGH)
-                    val resp = ByteArray(readLen)
-                    buf.get(resp)
-    
-                    tunOut.write(resp)
+                    
+                    // ✅ FIX: BUILD FULL IP+TCP PACKET, bukan write payload sahaja
+                    val srcIp = ip(pkt, 12)
+                    val srcPort = port(pkt, ipHdrLen) // Source port dari packet asal
+                    val dstIp = ip(pkt, 16)
+                    
+                    val respPacket = buildTCPResponse(
+                        buf.array(), readLen,
+                        dIp, dPort,          // Server IP:Port
+                        srcIp, srcPort,      // Client IP:Port
+                        pkt                  // Original packet untuk reference
+                    )
+                    
+                    tunOut.write(respPacket)
                     android.util.Log.d("CB_VPN", "✅ TCP RESP: $dIp:$dPort $readLen bytes")
                 }
     
@@ -230,6 +243,120 @@ class AppMonitorVPNService : VpnService() {
         }
         while (sum shr 16 > 0) sum = (sum and 0xFFFF) + (sum shr 16)
         return (sum.inv().toInt() and 0xFFFF)
+    }
+
+    private fun buildTCPResponse(
+        payload: ByteArray, pLen: Int,
+        srcIp: String, srcPort: Int,      // Server
+        dstIp: String, dstPort: Int,      // Client
+        originalPkt: ByteArray            // Untuk ambil sequence/ack numbers
+    ): ByteArray {
+        val ipHdrLen = 20
+        val tcpHdrLen = 20
+        val totalLen = ipHdrLen + tcpHdrLen + pLen
+        
+        val resp = ByteArray(totalLen)
+        
+        // ==== IP HEADER ====
+        resp[0] = 0x45.toByte()           // Version + IHL
+        resp[1] = 0x00.toByte()           // DSCP
+        resp[2] = (totalLen shr 8).toByte()
+        resp[3] = (totalLen and 0xFF).toByte()
+        resp[4] = 0x00.toByte()           // Identification
+        resp[5] = 0x00.toByte()
+        resp[6] = 0x40.toByte()           // Flags (Don't Fragment)
+        resp[7] = 0x00.toByte()           // Fragment offset
+        resp[8] = 64.toByte()             // TTL
+        resp[9] = 6.toByte()              // Protocol (TCP)
+        
+        // Source IP (Server)
+        val src = srcIp.split(".")
+        resp[12] = src[0].toInt().toByte()
+        resp[13] = src[1].toInt().toByte()
+        resp[14] = src[2].toInt().toByte()
+        resp[15] = src[3].toInt().toByte()
+        
+        // Destination IP (Client)
+        val dst = dstIp.split(".")
+        resp[16] = dst[0].toInt().toByte()
+        resp[17] = dst[1].toInt().toByte()
+        resp[18] = dst[2].toInt().toByte()
+        resp[19] = dst[3].toInt().toByte()
+        
+        // ==== TCP HEADER ====
+        val tcpOffset = ipHdrLen
+        wPort(resp, tcpOffset, srcPort)          // Source port (server)
+        wPort(resp, tcpOffset + 2, dstPort)      // Dest port (client)
+        
+        // Sequence number (ambil dari ACK original)
+        val origTcpOffset = ((originalPkt[0].toInt() and 0x0F) * 4)
+        val seqNum = ByteArray(4)
+        System.arraycopy(originalPkt, origTcpOffset + 4, seqNum, 0, 4)
+        System.arraycopy(seqNum, 0, resp, tcpOffset + 4, 4)
+        
+        // ACK number (simplified - increment seq)
+        val ackNum = ByteArray(4) { 0x00 }
+        System.arraycopy(ackNum, 0, resp, tcpOffset + 8, 4)
+        
+        resp[tcpOffset + 12] = 0x50.toByte()      // Data offset (5 * 4 = 20 bytes)
+        resp[tcpOffset + 13] = 0x18.toByte()      // Flags (PSH + ACK)
+        
+        val window = 65535
+        resp[tcpOffset + 14] = (window shr 8).toByte()
+        resp[tcpOffset + 15] = (window and 0xFF).toByte()
+        
+        // Checksum & urgent pointer (akan diisi nanti)
+        resp[tcpOffset + 16] = 0x00
+        resp[tcpOffset + 17] = 0x00
+        resp[tcpOffset + 18] = 0x00
+        resp[tcpOffset + 19] = 0x00
+        
+        // ==== PAYLOAD ====
+        System.arraycopy(payload, 0, resp, tcpOffset + tcpHdrLen, pLen)
+        
+        // ==== CALCULATE CHECKSUMS ====
+        // IP checksum
+        val ipCsum = csum(resp, 0, ipHdrLen)
+        resp[10] = (ipCsum shr 8).toByte()
+        resp[11] = (ipCsum and 0xFF).toByte()
+        
+        // TCP checksum (pseudo-header)
+        val tcpCsum = calculateTcpChecksum(resp, ipHdrLen, tcpHdrLen + pLen, srcIp, dstIp)
+        resp[tcpOffset + 16] = (tcpCsum shr 8).toByte()
+        resp[tcpOffset + 17] = (tcpCsum and 0xFF).toByte()
+        
+        return resp
+    }
+    
+    private fun calculateTcpChecksum(
+        packet: ByteArray, 
+        tcpStart: Int, 
+        tcpLength: Int,
+        srcIp: String, 
+        dstIp: String
+    ): Int {
+        val pseudo = ByteArray(12 + tcpLength)
+        
+        // Pseudo header (src IP, dst IP, zero, protocol, TCP length)
+        val src = srcIp.split(".")
+        val dst = dstIp.split(".")
+        
+        for (i in 0..3) {
+            pseudo[i] = src[i].toInt().toByte()
+            pseudo[4 + i] = dst[i].toInt().toByte()
+        }
+        
+        pseudo[8] = 0x00
+        pseudo[9] = 6.toByte() // Protocol (TCP)
+        pseudo[10] = (tcpLength shr 8).toByte()
+        pseudo[11] = (tcpLength and 0xFF).toByte()
+        
+        // TCP segment (dengan checksum field = 0)
+        System.arraycopy(packet, tcpStart, pseudo, 12, tcpLength)
+        pseudo[12 + 16] = 0x00 // Zero checksum field
+        pseudo[12 + 17] = 0x00
+        
+        return csum(pseudo, 0, pseudo.size)
     }
     
     private fun applyRealmeWorkaround(builder: Builder) {
