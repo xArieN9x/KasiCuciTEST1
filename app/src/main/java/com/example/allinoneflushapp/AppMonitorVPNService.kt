@@ -148,29 +148,47 @@ class AppMonitorVPNService : VpnService() {
         Thread {
             var channel: SocketChannel? = null
             try {
+                val fd = vpnInterface?.fileDescriptor ?: return@Thread
+                val tunOut = FileOutputStream(fd)
+    
                 channel = SocketChannel.open()
                 channel.configureBlocking(true)
-                
-                // ✅ PROTECT socket descriptor
+    
+                // 🔐 penting
                 if (!protect(channel.socket())) {
                     android.util.Log.w("CB_VPN", "Protect FAILED")
                     channel.close()
                     return@Thread
                 }
-                
-                // ✅ Connect
-                channel.connect(InetSocketAddress(InetAddress.getByName(dIp), dPort))
-                
-                val pLen = len - 40
-                if (pLen > 0 && channel.isConnected) {
-                    val payload = ByteBuffer.wrap(pkt, 40, pLen)
-                    channel.write(payload)
-                    android.util.Log.d("CB_VPN", "✅ TCP: $dIp:$dPort")
+    
+                channel.connect(InetSocketAddress(dIp, dPort))
+    
+                // ==== SEND PAYLOAD ====
+                val hdrLen = ((pkt[0].toInt() and 0x0F) * 4)
+                val pLen = len - hdrLen
+                if (pLen > 0) {
+                    channel.write(ByteBuffer.wrap(pkt, hdrLen, pLen))
                 }
-                
+    
+                // ==== READ RESPONSE ====
+                val buf = ByteBuffer.allocate(32767)
+                val readLen = channel.read(buf)
+    
+                if (readLen > 0) {
+                    buf.flip()
+    
+                    // ⚠️ MINIMAL TCP RESP (PASS-THROUGH)
+                    val resp = ByteArray(readLen)
+                    buf.get(resp)
+    
+                    tunOut.write(resp)
+                    android.util.Log.d("CB_VPN", "✅ TCP RESP: $dIp:$dPort $readLen bytes")
+                }
+    
                 channel.close()
             } catch (e: Exception) {
-                channel?.close()
+                android.util.Log.e("CB_VPN", "TCP err: ${e.message}")
+                try { channel?.close() } catch (_: Exception) {}
             }
         }.start()
     }
