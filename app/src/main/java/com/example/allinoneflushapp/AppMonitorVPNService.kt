@@ -14,6 +14,7 @@ import java.io.FileOutputStream
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
+import libcore.io.OsConstants
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -35,11 +36,12 @@ class AppMonitorVPNService : VpnService() {
     
         val builder = Builder()
         builder.setSession("CB Monitor")
-            .setMtu(1500)
-            .addAddress("10.215.173.2", 30)
-            .addRoute("0.0.0.0", 0)
-            .addDnsServer("8.8.8.8")
-            .addDnsServer("1.1.1.1")
+        .setMtu(1500)
+        .addAddress("10.222.222.2", 30)     // ← Ubah IP utk trigger tun1
+        .addRoute("0.0.0.0", 0)
+        .addDnsServer("8.8.8.8")
+        .addDnsServer("1.1.1.1")
+        .allowFamily(OsConstants.AF_INET)   // ← Pastikan IPv4 dibenarkan
         
         try { builder.addDisallowedApplication("com.android.chrome") } catch (e: Exception) {}
         applyRealmeWorkaround(builder)
