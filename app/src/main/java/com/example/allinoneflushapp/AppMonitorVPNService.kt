@@ -14,6 +14,7 @@ import java.io.FileOutputStream
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
+import java.util.concurrent.ConcurrentHashMap
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -28,6 +29,14 @@ class AppMonitorVPNService : VpnService() {
     private val CHANNEL_ID = "panda_monitor_channel"
     private val NOTIF_ID = 1001
     
+    // ✅ FIX: Track TCP connection states
+    data class TcpConnectionState(
+        var serverSeq: Long = 1000L,  // Initial sequence number
+        var clientSeq: Long = 0L,
+        var lastAckSent: Long = 0L
+    )
+    private val tcpConnections = ConcurrentHashMap<String, TcpConnectionState>()
+    
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         instance = this
         createNotificationChannel()
@@ -36,17 +45,15 @@ class AppMonitorVPNService : VpnService() {
         val builder = Builder()
         builder.setSession("CB Monitor")
         .setMtu(1500)
-        .addAddress("10.222.222.2", 30)     // ← Ubah IP utk trigger tun1
+        .addAddress("10.222.222.2", 30)
         .addRoute("0.0.0.0", 0)
         .addDnsServer("8.8.8.8")
         .addDnsServer("1.1.1.1")
-        .allowFamily(2)  // 2 = AF_INET (IPv4)
+        .allowFamily(2)
         
-        // Hanya tunnel app yang diperlukan
         try {
             builder.addAllowedApplication("com.logistics.rider.foodpanda")
         } catch (e: Exception) {}
-        // Optional: tambah Chrome untuk test
         try {
             builder.addAllowedApplication("com.android.chrome")
         } catch (e: Exception) {}
@@ -94,19 +101,19 @@ class AppMonitorVPNService : VpnService() {
                         val dstIp = ip(pkt, 16)
                         
                         when (proto) {
-                            17 -> { // UDP
+                            17 -> {
                                 if (len >= 28) {
                                     val dPort = port(pkt, 22)
                                     forwardUDP(pkt, len, dstIp, dPort, output)
                                 }
                             }
-                            6 -> { // TCP - FORWARD ke real connection!
+                            6 -> {
                                 if (len >= 40) {
                                     val dPort = port(pkt, 22)
                                     forwardTCP(pkt, len, dstIp, dPort)
                                 }
                             }
-                            1 -> output.write(pkt, 0, len) // ICMP
+                            1 -> output.write(pkt, 0, len)
                         }
                     }
                 }
@@ -151,7 +158,6 @@ class AppMonitorVPNService : VpnService() {
         }.start()
     }
     
-    // ✅ TCP FORWARDING (NEW!)
     private fun forwardTCP(pkt: ByteArray, len: Int, dIp: String, dPort: Int) {
         Thread {
             var channel: SocketChannel? = null
@@ -159,55 +165,56 @@ class AppMonitorVPNService : VpnService() {
                 val fd = vpnInterface?.fileDescriptor ?: return@Thread
                 val tunOut = FileOutputStream(fd)
     
-                // Parse packet details
                 val ipHdrLen = ((pkt[0].toInt() and 0x0F) * 4)
                 val srcIp = ip(pkt, 12)
                 val srcPort = port(pkt, ipHdrLen)
                 
-                // Extract TCP flags dan sequence numbers
                 val tcpFlags = if (len > ipHdrLen + 13) pkt[ipHdrLen + 13].toInt() and 0xFF else 0
                 val isSyn = (tcpFlags and 0x02) != 0
                 val isAck = (tcpFlags and 0x10) != 0
                 val isRst = (tcpFlags and 0x04) != 0
                 val isFin = (tcpFlags and 0x01) != 0
                 
-                // 🚨 CRITICAL FIX: Handle SYN-ACK handshake
+                // ✅ Connection key for state tracking
+                val connKey = "$srcIp:$srcPort-$dIp:$dPort"
+                
                 if (isSyn && !isAck) {
-                    // Ini SYN pertama (handshake step 1)
                     android.util.Log.d("CB_VPN", "🔄 TCP HANDSHAKE: SYN from $srcIp:$srcPort to $dIp:$dPort")
                     
-                    // Extract client sequence number
                     val clientSeqNum = ByteArray(4)
                     if (len >= ipHdrLen + 8) {
                         System.arraycopy(pkt, ipHdrLen + 4, clientSeqNum, 0, 4)
                     }
                     
-                    // Simpan untuk response SYN-ACK
-                    val synAckResponse = buildSynAckResponse(
-                        dIp, dPort,          // Server
-                        srcIp, srcPort,      // Client
-                        clientSeqNum         // Client's sequence number
+                    // ✅ FIX: Store initial state
+                    val clientSeqLong = bytesToLong(clientSeqNum)
+                    tcpConnections[connKey] = TcpConnectionState(
+                        serverSeq = 1000L,
+                        clientSeq = clientSeqLong,
+                        lastAckSent = clientSeqLong + 1
                     )
                     
-                    // Send SYN-ACK back to client (handshake step 2)
+                    val synAckResponse = buildSynAckResponse(
+                        dIp, dPort,
+                        srcIp, srcPort,
+                        clientSeqNum
+                    )
+                    
                     tunOut.write(synAckResponse)
                     android.util.Log.d("CB_VPN", "✅ Sent SYN-ACK to client")
-                    
-                    // JANGAN connect ke server lagi - tunggu client ACK dulu
                     return@Thread
                 }
 
-                // Log ACK packets for handshake validation
                 if (isAck && !isSyn && !isFin && !isRst) {
                     android.util.Log.d("CB_VPN", "✅ Client ACK received: $srcIp:$srcPort → $dIp:$dPort")
                 }
                 
                 if (isRst || isFin) {
                     android.util.Log.d("CB_VPN", "TCP $dIp:$dPort RST/FIN - closing")
+                    tcpConnections.remove(connKey)  // ✅ Cleanup
                     return@Thread
                 }
                 
-                // Hanya proceed jika ini data packet (bukan handshake)
                 channel = SocketChannel.open()
                 channel.configureBlocking(true)
                 channel.socket().soTimeout = 10000
@@ -222,7 +229,6 @@ class AppMonitorVPNService : VpnService() {
                 channel.connect(InetSocketAddress(dIp, dPort))
                 android.util.Log.d("CB_VPN", "✅ Connected to $dIp:$dPort")
     
-                // Extract dan send payload
                 val tcpHdrLen = if (len > ipHdrLen + 12) 
                     ((pkt[ipHdrLen + 12].toInt() and 0xF0) shr 4) * 4 
                 else 20
@@ -236,7 +242,6 @@ class AppMonitorVPNService : VpnService() {
                     android.util.Log.d("CB_VPN", "Sent $written bytes to $dIp:$dPort")
                 }
     
-                // Read server response
                 val readBuffer = ByteBuffer.allocate(65535)
                 val readLen = channel.read(readBuffer)
                 
@@ -245,25 +250,42 @@ class AppMonitorVPNService : VpnService() {
                     val responseData = ByteArray(readLen)
                     readBuffer.get(responseData)
                     
-                    // Build dan send response ke client
-                    val clientSeqNum = ByteArray(4)
-                    if (len >= ipHdrLen + 8) {
-                        System.arraycopy(pkt, ipHdrLen + 4, clientSeqNum, 0, 4)
+                    // ✅ FIX: Get or create connection state
+                    val state = tcpConnections.getOrPut(connKey) {
+                        TcpConnectionState(
+                            serverSeq = 1000L,
+                            clientSeq = 0L,
+                            lastAckSent = 0L
+                        )
                     }
                     
-                    val ackNum = calculateAckNumber(clientSeqNum, payloadLen)
+                    // ✅ FIX: Extract client sequence from incoming packet
+                    val clientSeqBytes = ByteArray(4)
+                    if (len >= ipHdrLen + 8) {
+                        System.arraycopy(pkt, ipHdrLen + 4, clientSeqBytes, 0, 4)
+                    }
+                    val clientSeqLong = bytesToLong(clientSeqBytes)
                     
+                    // ✅ FIX: Calculate correct ACK (client seq + client payload length)
+                    val ackNumLong = clientSeqLong + payloadLen
+                    state.lastAckSent = ackNumLong
+                    
+                    // ✅ FIX: Build response with tracked sequence numbers
                     val tcpResponse = buildTCPDataResponse(
                         responseData, readLen,
-                        dIp, dPort,          // Server
-                        srcIp, srcPort,      // Client  
-                        clientSeqNum,        // Client sequence
-                        ackNum,              // ACK number
-                        true                 // ACK flag
+                        dIp, dPort,          // Server (source of response)
+                        srcIp, srcPort,      // Client (destination)
+                        longToBytes(state.serverSeq),  // Server sequence
+                        longToBytes(ackNumLong),       // ACK = client seq + payload
+                        true
                     )
                     
                     tunOut.write(tcpResponse)
-                    android.util.Log.d("CB_VPN", "✅ TCP Data Response: $readLen bytes")
+                    
+                    // ✅ FIX: Increment server sequence by data sent
+                    state.serverSeq += readLen
+                    
+                    android.util.Log.d("CB_VPN", "✅ TCP Data Response: $readLen bytes (seq=${state.serverSeq - readLen}, ack=$ackNumLong)")
                 }
     
                 channel.close()
@@ -276,61 +298,71 @@ class AppMonitorVPNService : VpnService() {
         }.start()
     }
 
+    // ✅ NEW: Helper functions for sequence number conversion
+    private fun bytesToLong(bytes: ByteArray): Long {
+        var result = 0L
+        for (i in 0..3) {
+            result = (result shl 8) or (bytes[i].toLong() and 0xFF)
+        }
+        return result and 0xFFFFFFFFL  // Keep as unsigned 32-bit
+    }
+    
+    private fun longToBytes(value: Long): ByteArray {
+        val bytes = ByteArray(4)
+        bytes[0] = ((value shr 24) and 0xFF).toByte()
+        bytes[1] = ((value shr 16) and 0xFF).toByte()
+        bytes[2] = ((value shr 8) and 0xFF).toByte()
+        bytes[3] = (value and 0xFF).toByte()
+        return bytes
+    }
+
     private fun buildSynAckResponse(
-        srcIp: String, srcPort: Int,      // Server IP & port
-        dstIp: String, dstPort: Int,      // Client IP & port
-        clientSeqNum: ByteArray           // Client's initial sequence number (4 bytes)
+        srcIp: String, srcPort: Int,
+        dstIp: String, dstPort: Int,
+        clientSeqNum: ByteArray
     ): ByteArray {
         val ipHdrLen = 20
         val tcpHdrLen = 20
         val totalLen = ipHdrLen + tcpHdrLen
         val resp = ByteArray(totalLen)
     
-        // ===== IP HEADER =====
-        resp[0] = 0x45.toByte()           // Version 4, IHL 5 (20 bytes)
-        resp[1] = 0x00.toByte()           // DSCP
+        resp[0] = 0x45.toByte()
+        resp[1] = 0x00.toByte()
         resp[2] = (totalLen shr 8).toByte()
         resp[3] = (totalLen and 0xFF).toByte()
-        resp[4] = 0x00.toByte()           // ID
+        resp[4] = 0x00.toByte()
         resp[5] = 0x00.toByte()
-        resp[6] = 0x40.toByte()           // Flags: Don't Fragment
-        resp[7] = 0x00.toByte()           // Fragment offset
-        resp[8] = 64.toByte()             // TTL
-        resp[9] = 6.toByte()              // Protocol: TCP
+        resp[6] = 0x40.toByte()
+        resp[7] = 0x00.toByte()
+        resp[8] = 64.toByte()
+        resp[9] = 6.toByte()
     
-        // Source IP = server
         val srcParts = srcIp.split(".")
         for (i in 0..3) {
             resp[12 + i] = srcParts[i].toInt().toByte()
         }
     
-        // Destination IP = client
         val dstParts = dstIp.split(".")
         for (i in 0..3) {
             resp[16 + i] = dstParts[i].toInt().toByte()
         }
     
-        // IP checksum (calculated later)
         resp[10] = 0x00
         resp[11] = 0x00
         val ipCsum = csum(resp, 0, ipHdrLen)
         resp[10] = (ipCsum shr 8).toByte()
         resp[11] = (ipCsum and 0xFF).toByte()
     
-        // ===== TCP HEADER =====
         val tcpOffset = ipHdrLen
     
-        // Source port (server), Dest port (client)
         wPort(resp, tcpOffset, srcPort)
         wPort(resp, tcpOffset + 2, dstPort)
     
-        // Server sequence number (fixed non-zero)
-        resp[tcpOffset + 4] = 0x10.toByte()
+        resp[tcpOffset + 4] = 0x00.toByte()
         resp[tcpOffset + 5] = 0x00.toByte()
-        resp[tcpOffset + 6] = 0x00.toByte()
-        resp[tcpOffset + 7] = 0x01.toByte()
+        resp[tcpOffset + 6] = 0x03.toByte()
+        resp[tcpOffset + 7] = 0xE8.toByte()  // Seq = 1000
     
-        // ACK = client seq + 1
         val ackNum = ByteArray(4)
         System.arraycopy(clientSeqNum, 0, ackNum, 0, 4)
         var carry = 1
@@ -342,23 +374,16 @@ class AppMonitorVPNService : VpnService() {
         }
         System.arraycopy(ackNum, 0, resp, tcpOffset + 8, 4)
     
-        // Data offset (5 << 4 = 0x50), reserved
         resp[tcpOffset + 12] = 0x50.toByte()
-    
-        // Flags: SYN + ACK = 0x12
         resp[tcpOffset + 13] = 0x12.toByte()
-    
-        // ✅ FIX: Window size = 65535 (0xFFFF)
         resp[tcpOffset + 14] = 0xFF.toByte()
         resp[tcpOffset + 15] = 0xFF.toByte()
     
-        // Zero TCP checksum for calculation
         resp[tcpOffset + 16] = 0x00
         resp[tcpOffset + 17] = 0x00
-        resp[tcpOffset + 18] = 0x00  // Urgent pointer (0)
+        resp[tcpOffset + 18] = 0x00
         resp[tcpOffset + 19] = 0x00
     
-        // ✅ Calculate TCP checksum with correct pseudo-header
         val tcpCsum = calculateTcpChecksum(resp, tcpOffset, tcpHdrLen, srcIp, dstIp)
         resp[tcpOffset + 16] = (tcpCsum shr 8).toByte()
         resp[tcpOffset + 17] = (tcpCsum and 0xFF).toByte()
@@ -370,34 +395,14 @@ class AppMonitorVPNService : VpnService() {
         payload: ByteArray, pLen: Int,
         srcIp: String, srcPort: Int,
         dstIp: String, dstPort: Int,
-        clientSeqNum: ByteArray,
+        serverSeqNum: ByteArray,  // ✅ FIX: Use tracked sequence
         ackNum: ByteArray,
         hasAckFlag: Boolean
     ): ByteArray {
-        // Sama seperti buildTCPResponse sebelumnya, tapi untuk data packets sahaja
-        // (Guna code yang sama dari fungsi buildTCPResponse yang existing)
         return buildTCPResponse(payload, pLen, srcIp, srcPort, dstIp, dstPort, 
-                              clientSeqNum, ackNum, hasAckFlag)
+                              serverSeqNum, ackNum, hasAckFlag)
     }
 
-    private fun calculateAckNumber(seqNum: ByteArray, payloadLen: Int): ByteArray {
-        val ackNum = ByteArray(4)
-        System.arraycopy(seqNum, 0, ackNum, 0, 4)
-        
-        if (payloadLen > 0) {
-            // Simple increment: add payload length to sequence number
-            var carry = payloadLen
-            for (i in 3 downTo 0) {
-                val current = (ackNum[i].toInt() and 0xFF) + carry
-                ackNum[i] = (current and 0xFF).toByte()
-                carry = current shr 8
-                if (carry == 0) break
-            }
-        }
-        
-        return ackNum
-    }
-    
     private fun buildUDPResp(pl: ByteArray, pLen: Int, sIp: String, sPort: Int,
                             d0: Byte, d1: Byte, d2: Byte, d3: Byte, dPort: Int): ByteArray {
         val tot = 28 + pLen
@@ -439,11 +444,11 @@ class AppMonitorVPNService : VpnService() {
 
     private fun buildTCPResponse(
         payload: ByteArray, pLen: Int,
-        srcIp: String, srcPort: Int,      // Server
-        dstIp: String, dstPort: Int,      // Client
-        clientSeqNum: ByteArray,          // Client's sequence number
-        ackNum: ByteArray,                // ACK number (client seq + payload len)
-        hasAckFlag: Boolean               // If client packet had ACK flag
+        srcIp: String, srcPort: Int,
+        dstIp: String, dstPort: Int,
+        serverSeqNum: ByteArray,  // ✅ FIX: Use passed sequence
+        ackNum: ByteArray,
+        hasAckFlag: Boolean
     ): ByteArray {
         val ipHdrLen = 20
         val tcpHdrLen = 20
@@ -451,75 +456,59 @@ class AppMonitorVPNService : VpnService() {
         
         val resp = ByteArray(totalLen)
         
-        // ==== IP HEADER ====
-        resp[0] = 0x45.toByte()           // Version 4 + IHL 5 (20 bytes)
-        resp[1] = 0x00.toByte()           // DSCP
+        resp[0] = 0x45.toByte()
+        resp[1] = 0x00.toByte()
         resp[2] = (totalLen shr 8).toByte()
         resp[3] = (totalLen and 0xFF).toByte()
-        resp[4] = 0x00.toByte()           // Identification (byte 0)
-        resp[5] = 0x00.toByte()           // Identification (byte 1)
-        resp[6] = 0x40.toByte()           // Flags: Don't Fragment
-        resp[7] = 0x00.toByte()           // Fragment offset
-        resp[8] = 64.toByte()             // TTL
-        resp[9] = 6.toByte()              // Protocol: TCP
+        resp[4] = 0x00.toByte()
+        resp[5] = 0x00.toByte()
+        resp[6] = 0x40.toByte()
+        resp[7] = 0x00.toByte()
+        resp[8] = 64.toByte()
+        resp[9] = 6.toByte()
         
-        // Checksum (akan diisi nanti)
         resp[10] = 0x00
         resp[11] = 0x00
         
-        // Source IP (Server)
         val src = srcIp.split(".")
         for (i in 0..3) {
             resp[12 + i] = src[i].toInt().toByte()
         }
         
-        // Destination IP (Client)
         val dst = dstIp.split(".")
         for (i in 0..3) {
             resp[16 + i] = dst[i].toInt().toByte()
         }
         
-        // ==== TCP HEADER ====
         val tcpOffset = ipHdrLen
         
-        // Ports
-        wPort(resp, tcpOffset, srcPort)           // Source port (server)
-        wPort(resp, tcpOffset + 2, dstPort)       // Destination port (client)
+        wPort(resp, tcpOffset, srcPort)
+        wPort(resp, tcpOffset + 2, dstPort)
         
-        // Sequence number (server's)
-        val serverSeq = ByteArray(4) { if (it == 3) 0x01.toByte() else 0x00 }
-        System.arraycopy(serverSeq, 0, resp, tcpOffset + 4, 4)
+        // ✅ FIX: Use tracked server sequence number
+        System.arraycopy(serverSeqNum, 0, resp, tcpOffset + 4, 4)
         
-        // ACK number
         System.arraycopy(ackNum, 0, resp, tcpOffset + 8, 4)
         
-        // Data offset (5 * 4 = 20 bytes) + reserved
         resp[tcpOffset + 12] = 0x50.toByte()
         
-        // TCP flags (ACK + PSH)
-        val flags = if (hasAckFlag) 0x18.toByte() else 0x10.toByte() // ACK or ACK+PSH
+        val flags = if (hasAckFlag) 0x18.toByte() else 0x10.toByte()
         resp[tcpOffset + 13] = flags
         
-        // Window size (65535)
         resp[tcpOffset + 14] = 0xFF.toByte()
         resp[tcpOffset + 15] = 0xFF.toByte()
         
-        // Checksum & urgent pointer (akan diisi nanti)
         resp[tcpOffset + 16] = 0x00
         resp[tcpOffset + 17] = 0x00
         resp[tcpOffset + 18] = 0x00
         resp[tcpOffset + 19] = 0x00
         
-        // ==== PAYLOAD ====
         System.arraycopy(payload, 0, resp, tcpOffset + tcpHdrLen, pLen)
         
-        // ==== CALCULATE CHECKSUMS ====
-        // IP checksum
         val ipCsum = csum(resp, 0, ipHdrLen)
         resp[10] = (ipCsum shr 8).toByte()
         resp[11] = (ipCsum and 0xFF).toByte()
         
-        // TCP checksum dengan pseudo-header
         val tcpCsum = calculateTcpChecksum(resp, ipHdrLen, tcpHdrLen + pLen, srcIp, dstIp)
         resp[tcpOffset + 16] = (tcpCsum shr 8).toByte()
         resp[tcpOffset + 17] = (tcpCsum and 0xFF).toByte()
@@ -534,33 +523,25 @@ class AppMonitorVPNService : VpnService() {
         srcIp: String,
         dstIp: String
     ): Int {
-        // Build pseudo-header + TCP segment
         val pseudo = ByteArray(12 + tcpLength)
     
-        // Source IP
         val src = srcIp.split(".")
         for (i in 0..3) pseudo[i] = src[i].toInt().toByte()
     
-        // Destination IP
         val dst = dstIp.split(".")
         for (i in 0..3) pseudo[4 + i] = dst[i].toInt().toByte()
     
-        // Zero byte + Protocol (TCP = 6)
         pseudo[8] = 0x00
         pseudo[9] = 0x06.toByte()
     
-        // TCP length (big-endian, 2 bytes)
         pseudo[10] = (tcpLength shr 8).toByte()
         pseudo[11] = (tcpLength and 0xFF).toByte()
     
-        // Copy TCP header (with checksum zeroed)
         System.arraycopy(packet, tcpStart, pseudo, 12, tcpLength)
     
-        // Zero the TCP checksum field (offset 16-17 in TCP header = offset 28-29 in pseudo)
         pseudo[12 + 16] = 0x00
         pseudo[12 + 17] = 0x00
     
-        // Calculate checksum over pseudo-header + TCP segment
         return csum(pseudo, 0, pseudo.size)
     }
     
@@ -598,6 +579,7 @@ class AppMonitorVPNService : VpnService() {
         vpnInterface?.close()
         pandaActive = false
         instance = null
+        tcpConnections.clear()  // ✅ Cleanup state
         stopForeground(true)
     }
 
