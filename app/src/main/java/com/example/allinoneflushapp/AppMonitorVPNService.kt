@@ -14,7 +14,6 @@ import java.io.FileOutputStream
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.channels.SocketChannel
-import libcore.io.OsConstants
 
 class AppMonitorVPNService : VpnService() {
     companion object {
@@ -41,7 +40,7 @@ class AppMonitorVPNService : VpnService() {
         .addRoute("0.0.0.0", 0)
         .addDnsServer("8.8.8.8")
         .addDnsServer("1.1.1.1")
-        .allowFamily(OsConstants.AF_INET)   // ← Pastikan IPv4 dibenarkan
+        .allowFamily(2)  // 2 = AF_INET (IPv4)
         
         try { builder.addDisallowedApplication("com.android.chrome") } catch (e: Exception) {}
         applyRealmeWorkaround(builder)
