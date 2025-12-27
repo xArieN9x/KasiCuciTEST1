@@ -42,7 +42,14 @@ class AppMonitorVPNService : VpnService() {
         .addDnsServer("1.1.1.1")
         .allowFamily(2)  // 2 = AF_INET (IPv4)
         
-        try { builder.addDisallowedApplication("com.example.allinoneflushapp") } catch (e: Exception) {}
+        // Hanya tunnel app yang diperlukan
+        try {
+            builder.addAllowedApplication("com.logistics.rider.foodpanda")
+        } catch (e: Exception) {}
+        // Optional: tambah Chrome untuk test
+        try {
+            builder.addAllowedApplication("com.android.chrome")
+        } catch (e: Exception) {}
         applyRealmeWorkaround(builder)
     
         vpnInterface = try { builder.establish() } catch (e: Exception) {
